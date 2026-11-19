@@ -11,8 +11,13 @@ from torchvision import transforms as T
 from torchvision.transforms import functional as TF
 
 
-def normalize_thermal(image):
+def normalize_thermal(image, dequantize=False):
+    """Per-image p1/p99 stretch. ``dequantize`` adds uniform +-0.5 level noise
+    first, so stretched 8-bit targets stop sitting on a visible lattice that a
+    critic could separate from continuous predictions."""
     a = np.asarray(image, dtype=np.float32)
+    if dequantize:
+        a = a + np.random.uniform(-.5, .5, a.shape).astype(np.float32)
     lo, hi = np.percentile(a, [1, 99])
     if hi <= lo:
         return np.zeros_like(a)
@@ -47,7 +52,7 @@ class PairedDataset(Dataset):
         with Image.open(path) as im:
             rgb = im.convert('RGB')
         with Image.open(self.root / 'thermal' / f'{path.stem}.png') as im:
-            target = Image.fromarray(normalize_thermal(im.convert('L')))
+            target = Image.fromarray(normalize_thermal(im.convert('L'), dequantize=self.training))
         if self.training:
             top, left, h, w = T.RandomResizedCrop.get_params(rgb, scale=(.6, 1.), ratio=(.9, 1.1))
             rgb = TF.resized_crop(rgb, top, left, h, w, (self.crop, self.crop))

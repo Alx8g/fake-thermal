@@ -182,9 +182,7 @@ class Predictor:
         self.size = size
         self.device = select_device(device)
         state = torch.load(weights, map_location='cpu', weights_only=True)
-        self.model = ThermalUNet(pretrained=False,
-                                 conditioning=any(key.startswith('style.') for key in state)).eval()
-        self.model.load_state_dict(state, strict=True)
+        self.model = ThermalUNet.from_state(state).eval()
         self.model.to(device=self.device, dtype=torch.float32, memory_format=memory_format(self.device))
 
     @torch.inference_mode()

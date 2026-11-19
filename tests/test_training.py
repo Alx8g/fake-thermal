@@ -85,9 +85,26 @@ class TrainingTests(unittest.TestCase):
 
     def test_packaged_weights_strict_load_with_auto_detected_configuration(self):
         state = torch.load(WEIGHTS, map_location='cpu', weights_only=True)
-        model = ThermalUNet(pretrained=False,
-                             conditioning=any(key.startswith('style.') for key in state))
-        model.load_state_dict(state, strict=True)
+        ThermalUNet.from_state(state)
+
+    def test_fullres_warm_start_reproduces_the_source_model(self):
+        torch.manual_seed(0)
+        source = ThermalUNet(pretrained=False).eval()
+        grown = ThermalUNet(pretrained=False, fullres=True)
+        grown.load_compatible(source.state_dict())
+        grown.eval()
+        x = torch.rand(2, 3, 64, 96)
+        with torch.no_grad():
+            self.assertTrue(torch.allclose(source(x), grown(x), atol=1e-6))
+        self.assertTrue(any(key.startswith('fullres.') for key in grown.state_dict()))
+        self.assertEqual(ThermalUNet.options_for(grown.state_dict()),
+                         {'conditioning': False, 'fullres': True})
+
+    def test_fullres_round_trips_through_from_state(self):
+        model = ThermalUNet(pretrained=False, conditioning=True, fullres=True)
+        rebuilt = ThermalUNet.from_state(model.state_dict())
+        self.assertTrue(rebuilt.conditioning)
+        self.assertIsNotNone(rebuilt.fullres)
 
     def test_conditioning_adds_only_style_keys(self):
         plain = ThermalUNet(pretrained=False)

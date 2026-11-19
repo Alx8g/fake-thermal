@@ -124,9 +124,7 @@ def main():
                'checkpoints': []}
     for path, state in zip(args.checkpoints, states):
         weights = state['ema'] if state.get('ema') is not None else state['model']
-        model = ThermalUNet(pretrained=False,
-                            conditioning=any(key.startswith('style.') for key in weights)).eval()
-        model.load_state_dict(weights, strict=True)
+        model = ThermalUNet.from_state(weights).eval()
         model.to(device=device, dtype=torch.float32, memory_format=memory_format(device))
         entry = {'path': str(path), 'iteration': state['iteration'],
                  'stored_val_l1': round(state['val_l1'], 6),

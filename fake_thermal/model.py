@@ -47,8 +47,15 @@ class StyleConditioner(nn.Module):
         return films
 
 
+FULLRES_CHANNELS = 16
+
+
 class ThermalUNet(nn.Module):
-    def __init__(self, pretrained=True, conditioning=False):
+    """ResNet18 U-Net. ``fullres`` adds a small full-resolution RGB feature path
+    into the head; without it the finest features the head sees are a bilinear
+    upsample of stride-2 decoder output, which caps pixel-level detail."""
+
+    def __init__(self, pretrained=True, conditioning=False, fullres=False):
         super().__init__()
         self.conditioning = conditioning
         self.encoder = resnet18(weights=ResNet18_Weights.DEFAULT if pretrained else None)
@@ -57,11 +64,49 @@ class ThermalUNet(nn.Module):
         self.up2 = DecoderBlock(128, 128, 64)
         self.up1 = DecoderBlock(64, 64, 32)
         self.up0 = DecoderBlock(32, 64, 24)
-        self.head = nn.Sequential(nn.Conv2d(24, 16, 3, padding=1), nn.ReLU(inplace=True),
+        self.fullres = nn.Sequential(
+            nn.Conv2d(3, FULLRES_CHANNELS, 3, padding=1), nn.ReLU(inplace=True),
+            nn.Conv2d(FULLRES_CHANNELS, FULLRES_CHANNELS, 3, padding=1),
+            nn.ReLU(inplace=True)) if fullres else None
+        head_in = 24 + (FULLRES_CHANNELS if fullres else 0)
+        self.head = nn.Sequential(nn.Conv2d(head_in, 16, 3, padding=1), nn.ReLU(inplace=True),
                                   nn.Conv2d(16, 1, 1), nn.Sigmoid())
         self.style = StyleConditioner() if conditioning else None
         self.register_buffer('mean', torch.tensor([.485, .456, .406]).view(1, 3, 1, 1))
         self.register_buffer('std', torch.tensor([.229, .224, .225]).view(1, 3, 1, 1))
+
+    @staticmethod
+    def options_for(state):
+        """Architecture flags implied by a saved state dict."""
+        return {'conditioning': any(key.startswith('style.') for key in state),
+                'fullres': any(key.startswith('fullres.') for key in state)}
+
+    @classmethod
+    def from_state(cls, state, **overrides):
+        """Build the architecture a state dict was saved from and load it."""
+        model = cls(pretrained=False, **{**cls.options_for(state), **overrides})
+        model.load_compatible(state)
+        return model
+
+    def load_compatible(self, state):
+        """Strict load, except that a checkpoint without the full-resolution
+        path can initialize a model that has one: the new head inputs start at
+        zero, so the warm-started model reproduces the old output exactly."""
+        own = self.state_dict()
+        state = dict(state)
+        key = 'head.0.weight'
+        if key in state and state[key].shape != own[key].shape:
+            old = state[key]
+            if old.shape[1] > own[key].shape[1] or old.shape[0] != own[key].shape[0]:
+                raise ValueError(f'Incompatible {key}: {tuple(old.shape)} vs {tuple(own[key].shape)}')
+            grown = torch.zeros_like(own[key])
+            grown[:, :old.shape[1]] = old
+            state[key] = grown
+            for name, value in own.items():
+                if name.startswith('fullres.') and name not in state:
+                    state[name] = value
+        self.load_state_dict(state, strict=True)
+        return self
 
     def film(self, x, params):
         scale, shift = params
@@ -72,6 +117,7 @@ class ThermalUNet(nn.Module):
         films = self.style(rgb) if self.conditioning else [(None, None)] * 5
         x = F.pad(rgb, (0, (-w) % 32, 0, (-h) % 32), mode='replicate')
         x = (x - self.mean) / self.std
+        detail = self.fullres(x) if self.fullres is not None else None
         e = self.encoder
         s0 = self.film(e.relu(e.bn1(e.conv1(x))), films[0])
         s1 = self.film(e.layer1(e.maxpool(s0)), films[1])
@@ -81,4 +127,6 @@ class ThermalUNet(nn.Module):
         x = self.up0(self.up1(self.up2(self.up3(x, s3), s2), s1), s0)
         x = F.interpolate(x, size=(h + (-h) % 32, w + (-w) % 32),
                           mode='bilinear', align_corners=False)
+        if detail is not None:
+            x = torch.cat([x, detail], dim=1)
         return self.head(x)[..., :h, :w]
