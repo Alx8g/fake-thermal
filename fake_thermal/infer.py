@@ -106,6 +106,20 @@ def probe(path):
     return w, h, fps, count
 
 
+def fps_mode_args():
+    """Frame passthrough flag: ffmpeg 7 removed -vsync, 5.1+ takes -fps_mode."""
+    if fps_mode_args.passthrough is None:
+        probe = subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
+                                'nullsrc=s=8x8:d=0.04', '-fps_mode', 'passthrough',
+                                '-f', 'null', '-'], capture_output=True)
+        fps_mode_args.passthrough = probe.returncode == 0
+    return (['-fps_mode', 'passthrough'] if fps_mode_args.passthrough
+            else ['-vsync', '0'])
+
+
+fps_mode_args.passthrough = None
+
+
 class Predictor:
     def __init__(self, weights=DEFAULT_WEIGHTS, size=384, threads=2, device='auto'):
         if size < 32:
@@ -203,7 +217,7 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
             temp = Path(temporary)
             with (temp / 'decode.log').open('wb') as errors:
                 decoder = subprocess.Popen(['ffmpeg', '-v', 'error', '-threads', '1', '-filter_threads', '1', '-i', str(source),
-                                             '-map', '0:v:0', '-an', '-vsync', '0',
+                                             '-map', '0:v:0', '-an', *fps_mode_args(),
                                              '-threads', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'],
                                             stdout=subprocess.PIPE, stderr=errors)
                 enc = encoder(temp / 'color.mp4', w * (2 if side_by_side else 1), h, fps)
