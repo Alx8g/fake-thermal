@@ -40,6 +40,18 @@ class TrainingTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(thermal_loss(a, a)))
         self.assertGreater(thermal_loss(a, torch.ones_like(a)).item(), 1.)
 
+    def test_focal_frequency_loss_identity_finite_and_gradients(self):
+        from fake_thermal.losses import focal_frequency_loss
+        target = torch.rand(2, 1, 32, 32)
+        self.assertAlmostEqual(focal_frequency_loss(target, target).item(), 0., places=6)
+        self.assertAlmostEqual(thermal_loss(target, target, frequency_alpha=1.).item(), 0., places=5)
+        pred = torch.full_like(target, .5, requires_grad=True)
+        value = focal_frequency_loss(pred, target, alpha=1.)
+        self.assertTrue(torch.isfinite(value) and value.item() > 0)
+        value.backward()
+        self.assertTrue(torch.isfinite(pred.grad).all())
+        self.assertGreater(pred.grad.abs().sum().item(), 0)
+
     def test_percentile_stretch_and_constant(self):
         self.assertEqual(normalize_thermal(Image.new('L', (16, 16), 42)).sum(), 0)
         a = normalize_thermal(Image.fromarray(np.arange(256, dtype=np.uint8).reshape(16, 16)))

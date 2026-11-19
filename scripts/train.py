@@ -1,6 +1,7 @@
 """Training and a 50-iteration throughput benchmark for fake-thermal."""
 import argparse
 from collections import Counter
+from itertools import islice
 import json
 import math
 import os
@@ -22,12 +23,63 @@ from fake_thermal.device import DEVICES, memory_format, select_device, synchroni
 from fake_thermal.losses import thermal_loss
 from fake_thermal.model import ThermalUNet
 
+PRECISIONS = ('fp32', 'fp16')
+LAYOUTS = ('auto', 'contiguous', 'channels_last')
+RESUME_DEFAULTS = {'precision': 'fp32', 'layout': 'auto', 'frequency_alpha': 0., 'ema_decay': 0.}
 
-def loader(dataset, batch_size, workers, samples=None):
-    return DataLoader(dataset, batch_size=batch_size,
-                      sampler=dataset.sampler(samples) if samples else None,
+
+def forward(model, rgb, fp16=False):
+    """Autocast forward that always returns float32 so losses stay stable."""
+    with torch.autocast(device_type=rgb.device.type, dtype=torch.float16, enabled=fp16):
+        return model(rgb).float()
+
+
+class ResumeSampler:
+    """Replays the unconsumed tail of a seeded sampling stream."""
+
+    def __init__(self, indices):
+        self.indices = list(indices)
+
+    def __iter__(self):
+        return iter(self.indices)
+
+    def __len__(self):
+        return len(self.indices)
+
+
+class WeightEMA:
+    """Exponential moving average of weights; non-float buffers are copied verbatim."""
+
+    def __init__(self, model, decay):
+        if not 0 <= decay < 1:
+            raise ValueError('EMA decay must be in [0, 1)')
+        self.decay = decay
+        self.shadow = {key: value.detach().clone()
+                       for key, value in model.state_dict().items()}
+
+    @torch.inference_mode()
+    def update(self, model):
+        for key, value in model.state_dict().items():
+            if value.dtype.is_floating_point:
+                self.shadow[key].mul_(self.decay).add_(value, alpha=1 - self.decay)
+            else:
+                self.shadow[key].copy_(value)
+
+
+def resume_mismatches(stored, current):
+    keys = ('batch_size', 'crop', 'seed', 'precision', 'layout', 'frequency_alpha', 'ema_decay')
+    stored = {**RESUME_DEFAULTS, **stored}
+    current = {**RESUME_DEFAULTS, **current}
+    return [f'{key}: {stored.get(key)!r} != {current.get(key)!r}'
+            for key in keys if stored.get(key) != current.get(key)]
+
+
+def loader(dataset, batch_size, workers, samples=None, sampler=None):
+    selected = sampler if sampler is not None else (dataset.sampler(samples) if samples else None)
+    return DataLoader(dataset, batch_size=batch_size, sampler=selected,
                       num_workers=workers, persistent_workers=workers > 0,
-                      worker_init_fn=seed_worker, drop_last=samples is not None)
+                      worker_init_fn=seed_worker,
+                      drop_last=samples is not None or sampler is not None)
 
 
 def optimizer_for(model):
@@ -38,13 +90,13 @@ def optimizer_for(model):
                               {'params': decoder, 'lr': 3e-4}], weight_decay=.01)
 
 
-def step(model, optimizer, rgb, target):
+def step(model, optimizer, rgb, target, fp16=False, layout='auto', frequency_alpha=0.):
     device = next(model.parameters()).device
-    rgb = rgb.to(device=device, dtype=torch.float32, memory_format=memory_format(device))
+    rgb = rgb.to(device=device, dtype=torch.float32, memory_format=memory_format(device, layout))
     target = target.to(device=device, dtype=torch.float32)
     optimizer.zero_grad(set_to_none=True)
-    pred = model(rgb)
-    loss = thermal_loss(pred, target)
+    pred = forward(model, rgb, fp16)
+    loss = thermal_loss(pred, target, frequency_alpha)
     if not torch.isfinite(loss):
         raise RuntimeError(f'Non-finite loss: {loss.item()}')
     loss.backward()
@@ -53,14 +105,14 @@ def step(model, optimizer, rgb, target):
 
 
 @torch.inference_mode()
-def validate(model, batches, grid_path=None):
+def validate(model, batches, grid_path=None, fp16=False, layout='auto'):
     model.eval()
     device = next(model.parameters()).device
     total, count, by_source, examples = 0., 0, {}, {}
     for rgb, target, names in batches:
-        rgb = rgb.to(device=device, dtype=torch.float32, memory_format=memory_format(device))
+        rgb = rgb.to(device=device, dtype=torch.float32, memory_format=memory_format(device, layout))
         target = target.to(device=device, dtype=torch.float32)
-        pred = model(rgb)
+        pred = forward(model, rgb, fp16)
         errors = (pred - target).abs().mean(dim=(1, 2, 3))
         total += errors.sum().item()
         count += len(rgb)
@@ -92,11 +144,12 @@ def validate(model, batches, grid_path=None):
 
 def benchmark(args, train, val):
     results = []
+    fp16 = args.precision == 'fp16'
     candidates = (args.batch_size,) if args.batch_size else (2, 4)
     steps = 50 // len(candidates)
     for batch in candidates:
         model = ThermalUNet().to(device=args.device, dtype=torch.float32,
-                                 memory_format=memory_format(args.device))
+                                 memory_format=memory_format(args.device, args.layout))
         optimizer = optimizer_for(model)
         batches = iter(loader(train, batch, args.workers, steps * batch))
         timings = []
@@ -105,7 +158,7 @@ def benchmark(args, train, val):
             synchronize(args.device)
             start = time.perf_counter()
             rgb, target, _ = next(batches)
-            loss = step(model, optimizer, rgb, target)
+            loss = step(model, optimizer, rgb, target, fp16, args.layout, args.frequency_alpha)
             synchronize(args.device)
             timings.append(time.perf_counter() - start)
             print(f'benchmark batch={batch} iter={i+1}/{steps} loss={loss:.5f} seconds={timings[-1]:.3f}', flush=True)
@@ -115,18 +168,18 @@ def benchmark(args, train, val):
         del batches, optimizer, model
     selected = max(results, key=lambda r: r['images_per_second'])
     model = ThermalUNet().to(device=args.device, dtype=torch.float32,
-                             memory_format=memory_format(args.device))
+                             memory_format=memory_format(args.device, args.layout))
     synchronize(args.device)
     start = time.perf_counter()
-    validate(model, loader(val, selected['batch_size'], args.workers))
+    validate(model, loader(val, selected['batch_size'], args.workers), fp16=fp16, layout=args.layout)
     synchronize(args.device)
     val_seconds = time.perf_counter() - start
     seconds = selected['seconds_per_iter']
     iterations = args.iters or max(500, math.floor(.95 * args.hours * 3600 / (seconds + val_seconds / 500)))
     result = dict(selected, candidates=results, validation_seconds=val_seconds,
                   iterations=iterations, hours=args.hours, threads=args.threads,
-                  workers=args.workers, memory_format=str(memory_format(args.device)),
-                  device=args.device.type, crop=args.crop,
+                  workers=args.workers, memory_format=str(memory_format(args.device, args.layout)),
+                  device=args.device.type, crop=args.crop, precision=args.precision, layout=args.layout,
                   estimated_hours=iterations * (seconds + val_seconds / 500) / 3600)
     (args.output / 'benchmark.json').write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result, indent=2), flush=True)
@@ -140,42 +193,86 @@ def training_config(args):
     if batch is None or iterations is None:
         raise ValueError('Run --benchmark first or provide both --batch-size and --iters')
     config.update(batch_size=batch, iterations=iterations, crop=args.crop, device=args.device.type,
-                  memory_format=str(memory_format(args.device)))
+                  memory_format=str(memory_format(args.device, args.layout)),
+                  precision=args.precision, layout=args.layout)
     return config
 
 
 def train_run(args, train, val, ids):
     config = training_config(args)
+    config.update(seed=args.seed, frequency_alpha=args.frequency_alpha, ema_decay=args.ema_decay)
     batch, iterations = config['batch_size'], config['iterations']
+    fp16 = args.precision == 'fp16'
     model = ThermalUNet().to(device=args.device, dtype=torch.float32,
-                             memory_format=memory_format(args.device))
+                             memory_format=memory_format(args.device, args.layout))
     optimizer = optimizer_for(model)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=iterations)
-    batches = loader(train, batch, args.workers, iterations * batch)
+    start, best, sampler = 1, float('inf'), None
+    ema = WeightEMA(model, args.ema_decay) if args.ema_decay else None
+    if args.resume:
+        path = args.output / 'ckpt/last.pt'
+        if not path.exists():
+            raise ValueError(f'--resume requires an existing checkpoint at {path}')
+        state = torch.load(path, map_location='cpu', weights_only=False)
+        mismatches = resume_mismatches(state['config'], config)
+        if mismatches:
+            raise ValueError('Checkpoint differs from the requested run: ' + '; '.join(mismatches))
+        if state['config'].get('iterations', 0) > iterations:
+            raise ValueError('Checkpoint iterations exceed the configured iterations')
+        if state['val_ids'] != ids:
+            raise ValueError('Checkpoint validation split differs from the current data')
+        model.load_state_dict(state['model'], strict=True)
+        optimizer.load_state_dict(state['optimizer'])
+        scheduler.load_state_dict(state['scheduler'])
+        torch.set_rng_state(state['torch_rng'])
+        random.setstate(state['python_rng'])
+        np.random.set_state(state['numpy_rng'])
+        if ema is not None:
+            if state.get('ema') is None:
+                raise ValueError('Checkpoint has no EMA state for --ema-decay')
+            ema.shadow = state['ema']
+        start, best = state['iteration'] + 1, state['best_val_l1']
+        stream = iter(train.sampler(iterations * batch))
+        remaining = list(islice(stream, (start - 1) * batch, iterations * batch))
+        sampler = ResumeSampler(remaining)
+        print(f'RESUMED iteration={start} best_val_l1={best:.6f} '
+              f'remaining_batches={len(remaining) // batch}', flush=True)
+    batches = (loader(train, batch, args.workers, sampler=sampler) if sampler is not None
+               else loader(train, batch, args.workers, iterations * batch))
     validation = loader(val, batch, args.workers)
     (args.output / 'val_ids.json').write_text(json.dumps(ids, indent=2) + '\n')
-    config.update(seed=args.seed, learning_rates=[3e-5, 3e-4],
+    config.update(learning_rates=[3e-5, 3e-4],
                   loss='L1 + 0.5*(1-SSIM) + 0.1*gradient', target='per-image p1/p99 stretch',
                   source_counts=dict(Counter(train.sources)))
     (args.output / 'config.json').write_text(json.dumps(config, indent=2) + '\n')
-    best, start = float('inf'), time.perf_counter()
-    print(f'START pid={os.getpid()} batch={batch} iterations={iterations} config={config}', flush=True)
+    clock = time.perf_counter()
+    print(f'START pid={os.getpid()} batch={batch} iterations={iterations} precision={args.precision} '
+          f'layout={args.layout} config={config}', flush=True)
     model.train()
-    for iteration, (rgb, target, _) in enumerate(batches, 1):
-        loss = step(model, optimizer, rgb, target)
+    for offset, (rgb, target, _) in enumerate(batches):
+        iteration = start + offset
+        loss = step(model, optimizer, rgb, target, fp16, args.layout, args.frequency_alpha)
         scheduler.step()
+        if ema is not None:
+            ema.update(model)
         if iteration % 10 == 0:
-            elapsed = time.perf_counter() - start
+            elapsed = time.perf_counter() - clock
             print(f'iter={iteration}/{iterations} loss={loss:.6f} elapsed_s={elapsed:.1f} '
-                  f'wall_s_per_iter={elapsed/iteration:.3f} lr={scheduler.get_last_lr()[1]:.8f}', flush=True)
+                  f'wall_s_per_iter={elapsed / (offset + 1):.3f} lr={scheduler.get_last_lr()[1]:.8f}', flush=True)
         if iteration % 500 == 0 or iteration == iterations:
             grid = args.output / f'val_{iteration:06d}.jpg'
-            l1, source_l1 = validate(model, validation, grid)
+            if ema is not None:
+                raw = {key: value.detach().clone() for key, value in model.state_dict().items()}
+                model.load_state_dict(ema.shadow)
+            l1, source_l1 = validate(model, validation, grid, fp16, args.layout)
+            if ema is not None:
+                model.load_state_dict(raw)
             improved = l1 < best
             best = min(best, l1)
             state = {'model': model.state_dict(), 'optimizer': optimizer.state_dict(),
                      'scheduler': scheduler.state_dict(), 'iteration': iteration,
                      'val_l1': l1, 'best_val_l1': best, 'config': config,
+                     'ema': ema.shadow if ema is not None else None,
                      'val_ids': ids, 'torch_rng': torch.get_rng_state(),
                      'python_rng': random.getstate(), 'numpy_rng': np.random.get_state()}
             path = args.output / 'ckpt/last.pt'
@@ -187,7 +284,7 @@ def train_run(args, train, val, ids):
                 torch.save(state, temporary)
                 temporary.replace(args.output / 'ckpt/best.pt')
             print(f'CHECKPOINT iter={iteration} val_l1={l1:.6f} per_source={source_l1} best={best:.6f} grid={grid}', flush=True)
-    print(f'FINISHED elapsed_hours={(time.perf_counter()-start)/3600:.3f}', flush=True)
+    print(f'FINISHED elapsed_hours={(time.perf_counter() - clock) / 3600:.3f}', flush=True)
 
 
 def positive_int(value):
@@ -207,6 +304,16 @@ def build_parser():
     parser.add_argument('--hours', type=float, default=4.)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--device', choices=DEVICES, default='auto')
+    parser.add_argument('--precision', choices=PRECISIONS, default='fp32',
+                        help='fp16 enables autocast on CUDA/MPS (default fp32)')
+    parser.add_argument('--layout', choices=LAYOUTS, default='auto',
+                        help='tensor memory layout; auto keeps MPS contiguous, CUDA channels-last')
+    parser.add_argument('--resume', action='store_true',
+                        help='continue the run saved at outputs/ckpt/last.pt; iterations may be extended, not shortened')
+    parser.add_argument('--frequency-alpha', type=float, default=0.,
+                        help='focal frequency loss exponent; 0 disables (default), 1.0 recommended')
+    parser.add_argument('--ema-decay', type=float, default=0.,
+                        help='weight EMA decay used for checkpointing; 0 disables (default), 0.999 recommended')
     parser.add_argument('--batch-size', type=positive_int)
     parser.add_argument('--iters', type=positive_int)
     parser.add_argument('--crop', type=positive_int, default=256)
@@ -222,6 +329,12 @@ if __name__ == '__main__':
         args.device = select_device(args.device)
     except ValueError as error:
         parser.error(str(error))
+    if args.precision == 'fp16' and args.device.type not in ('cuda', 'mps'):
+        parser.error('--precision fp16 requires CUDA or MPS')
+    if args.frequency_alpha < 0:
+        parser.error('--frequency-alpha must be nonnegative')
+    if not 0 <= args.ema_decay < 1:
+        parser.error('--ema-decay must be in [0, 1)')
     torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1)
     torch.manual_seed(args.seed)

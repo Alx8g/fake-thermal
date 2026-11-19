@@ -1,4 +1,4 @@
-"""Shared accelerator selection; model arithmetic stays in float32."""
+"""Shared accelerator selection and tensor memory layout."""
 import torch
 
 
@@ -17,7 +17,11 @@ def select_device(name='auto'):
     return torch.device(name)
 
 
-def memory_format(device):
+def memory_format(device, layout='auto'):
+    if layout == 'channels_last':
+        return torch.channels_last
+    if layout == 'contiguous':
+        return torch.contiguous_format
     return torch.contiguous_format if device.type == 'mps' else torch.channels_last
 
 

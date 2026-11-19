@@ -21,5 +21,16 @@ def gradient_loss(pred, target):
     return .5 * (dx + dy)
 
 
-def thermal_loss(pred, target):
-    return F.l1_loss(pred, target) + .5 * (1 - ssim(pred, target)) + .1 * gradient_loss(pred, target)
+def focal_frequency_loss(pred, target, alpha=1.):
+    """Focal Frequency Loss (Jiang et al., ICCV 2021): weight hard frequencies."""
+    x = torch.fft.rfft2(pred.float(), dim=(-2, -1), norm='ortho')
+    y = torch.fft.rfft2(target.float(), dim=(-2, -1), norm='ortho')
+    distance = (x - y).abs().square()
+    return (distance.detach().pow(alpha) * distance).mean()
+
+
+def thermal_loss(pred, target, frequency_alpha=0.):
+    loss = F.l1_loss(pred, target) + .5 * (1 - ssim(pred, target)) + .1 * gradient_loss(pred, target)
+    if frequency_alpha:
+        loss = loss + focal_frequency_loss(pred, target, frequency_alpha)
+    return loss
