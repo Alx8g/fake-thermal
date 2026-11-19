@@ -26,7 +26,10 @@ def seed_worker(worker_id):
 
 
 class PairedDataset(Dataset):
-    def __init__(self, data_dir, split='train', records=None):
+    def __init__(self, data_dir, split='train', records=None, crop=256):
+        if crop < 32:
+            raise ValueError('Crop size must be at least 32')
+        self.crop = crop
         self.root = Path(data_dir) / 'pairs' / split
         self.training = split == 'train'
         self.paths = sorted((self.root / 'rgb').glob('*.jpg')) if records is None else [
@@ -47,8 +50,8 @@ class PairedDataset(Dataset):
             target = Image.fromarray(normalize_thermal(im.convert('L')))
         if self.training:
             top, left, h, w = T.RandomResizedCrop.get_params(rgb, scale=(.6, 1.), ratio=(.9, 1.1))
-            rgb = TF.resized_crop(rgb, top, left, h, w, (256, 256))
-            target = TF.resized_crop(target, top, left, h, w, (256, 256))
+            rgb = TF.resized_crop(rgb, top, left, h, w, (self.crop, self.crop))
+            target = TF.resized_crop(target, top, left, h, w, (self.crop, self.crop))
             if random.random() < .5:
                 rgb, target = TF.hflip(rgb), TF.hflip(target)
             rgb = self.jitter(rgb)
@@ -63,7 +66,7 @@ class PairedDataset(Dataset):
                 buffer.seek(0)
                 rgb = Image.open(buffer).convert('RGB')
         else:
-            rgb, target = TF.center_crop(rgb, (256, 256)), TF.center_crop(target, (256, 256))
+            rgb, target = TF.center_crop(rgb, (self.crop, self.crop)), TF.center_crop(target, (self.crop, self.crop))
         rgb = TF.to_tensor(rgb)
         if self.training and random.random() < .3:
             rgb = (rgb + torch.randn_like(rgb) * random.uniform(.005, .035)).clamp(0, 1)

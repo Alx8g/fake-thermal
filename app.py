@@ -1,16 +1,21 @@
 """Local upload/preview UI. Run with .venv/bin/python app.py."""
+import os
 from pathlib import Path
 import uuid
+
+os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1')
 
 import gradio as gr
 from PIL import Image
 
 from fake_thermal.infer import PALETTES, convert
+from fake_thermal.device import DEVICES
 
 ROOT = Path(__file__).resolve().parent
 
 
 def run_media(upload, palette, side_by_side, smoothing, raw, semantic, semantic_strength,
+              device, auto_contrast,
               progress=gr.Progress(track_tqdm=True)):
     if not upload:
         raise gr.Error('Upload an image or video first.')
@@ -25,12 +30,13 @@ def run_media(upload, palette, side_by_side, smoothing, raw, semantic, semantic_
     try:
         result = convert(upload, output, palette=palette, side_by_side=side_by_side,
                          smoothing=smoothing, raw=raw, threads=2, semantic=semantic,
-                         semantic_strength=semantic_strength)
+                         semantic_strength=semantic_strength, device=device, auto_contrast=auto_contrast)
     except Exception as error:
         raise gr.Error(str(error)) from error
     downloads = [str(output)] + ([result['raw']] if result['raw'] else [])
     return (None if is_image else str(output), str(output) if is_image else None,
-            downloads, f'{result["frames"]} frames in {result["seconds"]:.1f}s ({result["fps"]:.2f} fps)')
+            downloads, f'{result["frames"]} frames in {result["seconds"]:.1f}s '
+            f'({result["fps"]:.2f} fps, {result["device"]})')
 
 
 with gr.Blocks(title='fake-thermal') as app:
@@ -41,6 +47,8 @@ with gr.Blocks(title='fake-thermal') as app:
         palette = gr.Dropdown(list(PALETTES), value='ironbow', label='Palette')
         side = gr.Checkbox(label='RGB | thermal side by side')
         raw = gr.Checkbox(label='Also export grayscale heat map')
+    device = gr.Dropdown(list(DEVICES), value='auto', label='Device (auto: CUDA > MPS > CPU)')
+    auto_contrast = gr.Checkbox(value=True, label='Auto contrast (stable percentile display stretch)')
     smoothing = gr.Slider(0, .95, value=.65, step=.05,
                           label='Temporal smoothing (previous-frame weight; 0 = off)')
     semantic = gr.Checkbox(value=True, label='Semantic heat prior (downloads model on first use)')
@@ -52,7 +60,8 @@ with gr.Blocks(title='fake-thermal') as app:
     video = gr.Video(label='Video preview')
     image = gr.Image(label='Image preview', type='filepath')
     files = gr.File(label='Download results', file_count='multiple')
-    button.click(run_media, [upload, palette, side, smoothing, raw, semantic, semantic_strength],
+    button.click(run_media, [upload, palette, side, smoothing, raw, semantic, semantic_strength,
+                             device, auto_contrast],
                  [video, image, files, status], concurrency_limit=1)
 
 

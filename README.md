@@ -47,6 +47,8 @@ fake-thermal photo.jpg -o thermal.png --palette arctic
 fake-thermal input.mov -o out.mp4 --weights fake_thermal/weights/fake_thermal.pt
 fake-thermal input.mov -o model-only.mp4 --no-semantic
 fake-thermal input.mov -o stronger.mp4 --semantic-strength .9
+fake-thermal input.mov -o out.mp4 --device auto --auto-contrast
+fake-thermal input.mov -o fixed-display.mp4 --device cpu --no-auto-contrast
 ```
 
 Palettes: **ironbow**, **white-hot**, **black-hot**, **rainbow**, **arctic**.
@@ -68,6 +70,19 @@ First semantic use downloads torchvision's COCO-with-VOC-labels checkpoint
 (about 42 MB) to the Torch cache and requires internet. `--no-semantic` or
 `--semantic-strength 0` avoids that download and the segmentation cost.
 
+`--device auto` (default) uses **CUDA > Apple MPS > CPU**, for both the thermal
+and segmentation models. Explicit `cpu`, `mps`, and `cuda` are supported;
+unavailable explicit devices produce an error. Models stay fp32, including on
+MPS. Entry points enable PyTorch's MPS CPU fallback for unsupported operations
+unless `PYTORCH_ENABLE_MPS_FALLBACK` is already set. GPU/MPS require a compatible
+PyTorch installation; the CPU wheel command above is for CPU-only machines.
+
+**Auto contrast is on by default**: the displayed heat is stretched between
+2nd/99.5th percentiles with an EMA of those bounds, reset on scene cuts.
+`--no-auto-contrast` preserves fixed intensity-to-color mapping. Raw exports
+remain fused/smoothed heat without this display stretch. Contrast is purely
+visual and can exaggerate tiny temperature-independent differences.
+
 ffmpeg decodes MOV/HEVC and rotation metadata, including 4K/60fps inputs. Output
 is H.264 MP4 at source average fps; audio is copied when MP4-compatible, with
 AAC fallback otherwise. Variable-frame-rate timestamps become constant-rate
@@ -82,7 +97,8 @@ python app.py
 ```
 
 Open **http://localhost:7860**, upload a video or image, choose palette,
-side-by-side view, smoothing, semantic enable/strength, then click **Run** to preview and download.
+side-by-side view, smoothing, semantic enable/strength, device and auto contrast,
+then click **Run** to preview and download.
 Optional grayscale exports are available too. The UI binds all interfaces;
 use it on a trusted local network. No public share tunnel is enabled.
 
@@ -99,6 +115,14 @@ python scripts/prepare_data.py --download
 OMP_NUM_THREADS=6 MKL_NUM_THREADS=6 python scripts/train.py --benchmark
 OMP_NUM_THREADS=6 MKL_NUM_THREADS=6 python scripts/train.py
 python scripts/export_weights.py outputs/ckpt/best.pt
+```
+
+For a new accelerator run, use a **separate output directory**. Overrides can
+bypass the benchmark when both batch size and iteration count are supplied:
+
+```sh
+python scripts/train.py --device cuda --batch-size 16 --iters 50000 --crop 384 --output outputs/gpu-run
+# Apple Silicon: --device mps; use a macOS PyTorch wheel, not the CPU wheel index.
 ```
 
 Training uses ImageNet-pretrained ResNet18 (downloaded by torchvision), paired

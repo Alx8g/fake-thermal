@@ -14,6 +14,7 @@ import torch
 from tqdm import tqdm
 
 from fake_thermal.model import ThermalUNet
+from fake_thermal.device import DEVICES, memory_format, select_device
 from fake_thermal.semantic import SemanticPrior, fuse_heat, guided_upsample
 
 DEFAULT_WEIGHTS = Path(__file__).resolve().parent / 'weights/fake_thermal.pt'
@@ -40,16 +41,39 @@ class TemporalSmoother:
             raise ValueError('Smoothing must be in [0, 1)')
         self.smoothing, self.threshold = smoothing, cut_threshold
         self.previous, self.scene = None, None
+        self.reset_history = True
 
     def update(self, heat, rgb):
         scene = cv2.resize(rgb, (64, 64), interpolation=cv2.INTER_AREA).astype(np.float32) / 255
         cut = self.scene is not None and np.abs(scene - self.scene).mean() > self.threshold
-        if self.previous is None or cut or self.previous.shape != heat.shape:
+        self.reset_history = self.previous is None or cut or self.previous.shape != heat.shape
+        if self.reset_history:
             result = heat.copy()
         else:
             result = self.smoothing * self.previous + (1 - self.smoothing) * heat
         self.previous, self.scene = result, scene
         return result
+
+
+class DisplayNormalizer:
+    def __init__(self, smoothing=.9):
+        if not 0 <= smoothing < 1:
+            raise ValueError('Contrast smoothing must be in [0, 1)')
+        self.smoothing = smoothing
+        self.bounds = None
+
+    def update(self, heat, reset=False):
+        if not heat.size or not np.isfinite(heat).all():
+            raise ValueError('Display heat must be nonempty and finite')
+        bounds = np.percentile(heat, [2, 99.5])
+        if self.bounds is None or reset:
+            self.bounds = bounds
+        else:
+            self.bounds = self.smoothing * self.bounds + (1 - self.smoothing) * bounds
+        low, high = self.bounds
+        if high - low < 1e-5:
+            return np.clip(heat, 0, 1).copy()
+        return np.clip((heat - low) / (high - low), 0, 1).astype(np.float32)
 
 
 def probe(path):
@@ -77,15 +101,17 @@ def probe(path):
 
 
 class Predictor:
-    def __init__(self, weights=DEFAULT_WEIGHTS, size=384, threads=2):
+    def __init__(self, weights=DEFAULT_WEIGHTS, size=384, threads=2, device='auto'):
         if size < 32:
             raise ValueError('Working short side must be at least 32')
         torch.set_num_threads(threads)
         cv2.setNumThreads(1)
         self.size = size
-        self.model = ThermalUNet(pretrained=False).eval().to(memory_format=torch.channels_last)
+        self.device = select_device(device)
+        self.model = ThermalUNet(pretrained=False).eval()
         state = torch.load(weights, map_location='cpu', weights_only=True)
         self.model.load_state_dict(state, strict=True)
+        self.model.to(device=self.device, dtype=torch.float32, memory_format=memory_format(self.device))
 
     @torch.inference_mode()
     def __call__(self, rgb):
@@ -93,7 +119,8 @@ class Predictor:
         size = (round(w * self.size / min(w, h)), round(h * self.size / min(w, h)))
         small = cv2.resize(rgb, size, interpolation=cv2.INTER_AREA)
         x = torch.from_numpy(small.copy()).permute(2, 0, 1).unsqueeze(0).float() / 255
-        return self.model(x.contiguous(memory_format=torch.channels_last))[0, 0].numpy()
+        x = x.to(self.device, memory_format=memory_format(self.device))
+        return self.model(x)[0, 0].cpu().numpy()
 
 
 def encoder(path, w, h, fps):
@@ -116,7 +143,7 @@ def mux_audio(video, original, output):
 
 def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=False,
             weights=DEFAULT_WEIGHTS, smoothing=.65, raw=False, threads=2,
-            semantic=True, semantic_strength=.7):
+            semantic=True, semantic_strength=.7, device='auto', auto_contrast=True):
     start = time.perf_counter()
     source, output = Path(input_path), Path(output_path)
     if source.resolve() == output.resolve():
@@ -128,8 +155,10 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
     if not np.isfinite(semantic_strength) or not 0 <= semantic_strength <= 1:
         raise ValueError('Semantic strength must be between 0 and 1')
     smoother = TemporalSmoother(smoothing)
-    predictor = Predictor(weights, size, threads)
-    semantic_predictor = SemanticPrior() if semantic and semantic_strength > 0 else None
+    selected_device = select_device(device)
+    predictor = Predictor(weights, size, threads, selected_device.type)
+    semantic_predictor = SemanticPrior(device=selected_device.type) if semantic and semantic_strength > 0 else None
+    normalizer = DisplayNormalizer() if auto_contrast else None
 
     def predict_heat(rgb):
         heat = predictor(rgb)
@@ -152,7 +181,7 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
         if raw_path is not None and source.resolve() == raw_path.resolve():
             raise ValueError('Input and raw output must be different files')
         heat = guided_upsample(predict_heat(rgb), rgb)
-        colored = apply_palette(heat, palette)
+        colored = apply_palette(normalizer.update(heat) if normalizer else heat, palette)
         Image.fromarray(np.concatenate([rgb, colored], axis=1) if side_by_side else colored).save(output)
         if raw:
             Image.fromarray(np.rint(heat * 255).astype(np.uint8)).save(raw_path)
@@ -184,7 +213,8 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
                             rgb = np.frombuffer(buffer, dtype=np.uint8).reshape(h, w, 3)
                             heat = smoother.update(predict_heat(rgb), rgb)
                             heat = guided_upsample(heat, rgb)
-                            colored = apply_palette(heat, palette)
+                            display = normalizer.update(heat, reset=smoother.reset_history) if normalizer else heat
+                            colored = apply_palette(display, palette)
                             enc.stdin.write((np.concatenate([rgb, colored], axis=1) if side_by_side else colored).tobytes())
                             if raw_enc:
                                 gray = np.rint(heat * 255).astype(np.uint8)
@@ -217,7 +247,8 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
                                 process.wait()
     elapsed = time.perf_counter() - start
     stats = {'frames': frames, 'seconds': elapsed, 'fps': frames / elapsed,
-             'output': str(output), 'raw': str(raw_path) if raw_path else None}
+             'output': str(output), 'raw': str(raw_path) if raw_path else None,
+             'device': selected_device.type}
     print(json.dumps(stats), flush=True)
     return stats
 
@@ -236,11 +267,14 @@ def main():
     parser.add_argument('--semantic', action=argparse.BooleanOptionalAction, default=True,
                         help='semantic/emissive heat prior (default on; downloads weights on first use)')
     parser.add_argument('--semantic-strength', type=float, default=.7, help='prior strength, 0 to 1 (default .7)')
+    parser.add_argument('--device', choices=DEVICES, default='auto', help='auto selects CUDA, then MPS, then CPU')
+    parser.add_argument('--auto-contrast', action=argparse.BooleanOptionalAction, default=True,
+                        help='temporally stable percentile display contrast (default on; raw is unaffected)')
     args = parser.parse_args()
     try:
         convert(args.input, args.output, args.palette, args.size, args.side_by_side,
                 args.weights, args.smoothing, args.raw, args.threads,
-                args.semantic, args.semantic_strength)
+                args.semantic, args.semantic_strength, args.device, args.auto_contrast)
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
         parser.exit(1, f'fake-thermal: {error}\n')
 

@@ -1,5 +1,34 @@
 # CPU training
 
+## Device selection and overrides
+
+The historical CPU benchmark below remains unchanged. New runs accept
+`--device auto|cpu|mps|cuda` (auto: CUDA > MPS > CPU). Batches and both thermal
+targets/RGB inputs move to the selected device; validation grids return to CPU.
+All arithmetic remains fp32, including MPS, and entry points set
+`PYTORCH_ENABLE_MPS_FALLBACK=1` unless already configured. MPS uses contiguous
+memory format; CPU/CUDA use channels-last. Benchmark timings synchronize the
+accelerator. CUDA/MPS have not been hardware-tested on this CPU-only host.
+
+`--batch-size`, `--iters` and `--crop` override benchmark batch/iteration values
+and the default 256 crop. Supply both batch and iterations to start a run
+without a benchmark. Otherwise a benchmark file must supply missing values.
+Use a separate output directory for each device/run; do not reuse an active
+training directory. The original running process is not restarted or modified.
+
+```sh
+python scripts/train.py --device cuda --batch-size 16 --iters 50000 --crop 384 --output outputs/cuda-run
+python scripts/train.py --device mps --benchmark --batch-size 8 --crop 320 --output outputs/mps-run
+python scripts/train.py --device mps --batch-size 8 --crop 320 --output outputs/mps-run
+```
+
+With a benchmark batch override, all 50 steps use that batch; otherwise 25
+steps each at 2 and 4 are compared. Install the appropriate platform PyTorch
+wheel for accelerators. Larger crops do not add detail to existing 288px-short-
+side prepared data: training resizes crops, validation center-crops (padding
+if necessary). Reprepare at higher resolution if genuine extra detail is needed.
+Saved config records the effective device, crop, batch and iterations.
+
 ## Architecture and objective
 
 `fake_thermal/model.py`: ImageNet-pretrained torchvision ResNet18 encoder,

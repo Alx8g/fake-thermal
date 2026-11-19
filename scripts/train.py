@@ -1,4 +1,4 @@
-"""CPU training and a 50-iteration throughput benchmark for fake-thermal."""
+"""Training and a 50-iteration throughput benchmark for fake-thermal."""
 import argparse
 from collections import Counter
 import json
@@ -9,6 +9,7 @@ import random
 import sys
 import time
 
+os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1')
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
@@ -17,6 +18,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from fake_thermal.data import PairedDataset, seed_worker, validation_ids
+from fake_thermal.device import DEVICES, memory_format, select_device, synchronize
 from fake_thermal.losses import thermal_loss
 from fake_thermal.model import ThermalUNet
 
@@ -37,7 +39,9 @@ def optimizer_for(model):
 
 
 def step(model, optimizer, rgb, target):
-    rgb = rgb.contiguous(memory_format=torch.channels_last)
+    device = next(model.parameters()).device
+    rgb = rgb.to(device=device, dtype=torch.float32, memory_format=memory_format(device))
+    target = target.to(device=device, dtype=torch.float32)
     optimizer.zero_grad(set_to_none=True)
     pred = model(rgb)
     loss = thermal_loss(pred, target)
@@ -51,9 +55,12 @@ def step(model, optimizer, rgb, target):
 @torch.inference_mode()
 def validate(model, batches, grid_path=None):
     model.eval()
+    device = next(model.parameters()).device
     total, count, by_source, examples = 0., 0, {}, {}
     for rgb, target, names in batches:
-        pred = model(rgb.contiguous(memory_format=torch.channels_last))
+        rgb = rgb.to(device=device, dtype=torch.float32, memory_format=memory_format(device))
+        target = target.to(device=device, dtype=torch.float32)
+        pred = model(rgb)
         errors = (pred - target).abs().mean(dim=(1, 2, 3))
         total += errors.sum().item()
         count += len(rgb)
@@ -63,17 +70,21 @@ def validate(model, batches, grid_path=None):
             examples.setdefault(source, [])
             if len(examples[source]) < 4:
                 examples[source].append((rgb[i], target[i], pred[i], name))
+    if not count:
+        raise ValueError('Validation requires at least one image')
     if grid_path:
         rows = [row for source in sorted(examples) for row in examples[source]]
-        grid = Image.new('RGB', (768, len(rows) * 280), 'white')
+        tile = rows[0][0].shape[-1]
+        row_height = tile + 24
+        grid = Image.new('RGB', (3 * tile, len(rows) * row_height), 'white')
         draw = ImageDraw.Draw(grid)
         for row, (rgb, target, pred, name) in enumerate(rows):
-            draw.text((4, row * 280 + 3), name + '   RGB | normalized GT | prediction', fill='black')
+            draw.text((4, row * row_height + 3), name + '   RGB | normalized GT | prediction', fill='black')
             for col, x in enumerate((rgb, target, pred)):
-                a = (x.permute(1, 2, 0).numpy().clip(0, 1) * 255).astype('uint8')
+                a = (x.detach().cpu().permute(1, 2, 0).numpy().clip(0, 1) * 255).astype('uint8')
                 if a.shape[-1] == 1:
                     a = a[..., 0]
-                grid.paste(Image.fromarray(a).convert('RGB'), (col * 256, row * 280 + 24))
+                grid.paste(Image.fromarray(a).convert('RGB'), (col * tile, row * row_height + 24))
         grid.save(grid_path, quality=92)
     model.train()
     return total / count, {k: float(np.mean(v)) for k, v in by_source.items()}
@@ -81,41 +92,63 @@ def validate(model, batches, grid_path=None):
 
 def benchmark(args, train, val):
     results = []
-    for batch in (2, 4):
-        model = ThermalUNet().to(memory_format=torch.channels_last)
+    candidates = (args.batch_size,) if args.batch_size else (2, 4)
+    steps = 50 // len(candidates)
+    for batch in candidates:
+        model = ThermalUNet().to(device=args.device, dtype=torch.float32,
+                                 memory_format=memory_format(args.device))
         optimizer = optimizer_for(model)
-        batches = iter(loader(train, batch, args.workers, 25 * batch))
+        batches = iter(loader(train, batch, args.workers, steps * batch))
         timings = []
         model.train()
-        for i in range(25):
+        for i in range(steps):
+            synchronize(args.device)
             start = time.perf_counter()
             rgb, target, _ = next(batches)
             loss = step(model, optimizer, rgb, target)
+            synchronize(args.device)
             timings.append(time.perf_counter() - start)
-            print(f'benchmark batch={batch} iter={i+1}/25 loss={loss:.5f} seconds={timings[-1]:.3f}', flush=True)
+            print(f'benchmark batch={batch} iter={i+1}/{steps} loss={loss:.5f} seconds={timings[-1]:.3f}', flush=True)
         seconds = float(np.mean(timings[5:]))
         results.append({'batch_size': batch, 'seconds_per_iter': seconds,
                         'images_per_second': batch / seconds})
         del batches, optimizer, model
     selected = max(results, key=lambda r: r['images_per_second'])
-    model = ThermalUNet().to(memory_format=torch.channels_last)
+    model = ThermalUNet().to(device=args.device, dtype=torch.float32,
+                             memory_format=memory_format(args.device))
+    synchronize(args.device)
     start = time.perf_counter()
     validate(model, loader(val, selected['batch_size'], args.workers))
+    synchronize(args.device)
     val_seconds = time.perf_counter() - start
     seconds = selected['seconds_per_iter']
-    iterations = max(500, math.floor(.95 * args.hours * 3600 / (seconds + val_seconds / 500)))
+    iterations = args.iters or max(500, math.floor(.95 * args.hours * 3600 / (seconds + val_seconds / 500)))
     result = dict(selected, candidates=results, validation_seconds=val_seconds,
                   iterations=iterations, hours=args.hours, threads=args.threads,
-                  workers=args.workers, memory_format='channels_last',
+                  workers=args.workers, memory_format=str(memory_format(args.device)),
+                  device=args.device.type, crop=args.crop,
                   estimated_hours=iterations * (seconds + val_seconds / 500) / 3600)
     (args.output / 'benchmark.json').write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result, indent=2), flush=True)
 
 
+def training_config(args):
+    path = args.output / 'benchmark.json'
+    config = json.loads(path.read_text()) if path.exists() else {}
+    batch = args.batch_size or config.get('batch_size')
+    iterations = args.iters or config.get('iterations')
+    if batch is None or iterations is None:
+        raise ValueError('Run --benchmark first or provide both --batch-size and --iters')
+    config.update(batch_size=batch, iterations=iterations, crop=args.crop, device=args.device.type,
+                  memory_format=str(memory_format(args.device)))
+    return config
+
+
 def train_run(args, train, val, ids):
-    config = json.loads((args.output / 'benchmark.json').read_text())
+    config = training_config(args)
     batch, iterations = config['batch_size'], config['iterations']
-    model = ThermalUNet().to(memory_format=torch.channels_last)
+    model = ThermalUNet().to(device=args.device, dtype=torch.float32,
+                             memory_format=memory_format(args.device))
     optimizer = optimizer_for(model)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=iterations)
     batches = loader(train, batch, args.workers, iterations * batch)
@@ -157,7 +190,14 @@ def train_run(args, train, val, ids):
     print(f'FINISHED elapsed_hours={(time.perf_counter()-start)/3600:.3f}', flush=True)
 
 
-if __name__ == '__main__':
+def positive_int(value):
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError('Must be a positive integer')
+    return number
+
+
+def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--benchmark', action='store_true')
     parser.add_argument('--data', type=Path, default=Path('data'))
@@ -166,16 +206,31 @@ if __name__ == '__main__':
     parser.add_argument('--workers', type=int, default=2)
     parser.add_argument('--hours', type=float, default=4.)
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--device', choices=DEVICES, default='auto')
+    parser.add_argument('--batch-size', type=positive_int)
+    parser.add_argument('--iters', type=positive_int)
+    parser.add_argument('--crop', type=positive_int, default=256)
+    return parser
+
+
+if __name__ == '__main__':
+    parser = build_parser()
     args = parser.parse_args()
+    if args.crop < 32:
+        parser.error('--crop must be at least 32')
+    try:
+        args.device = select_device(args.device)
+    except ValueError as error:
+        parser.error(str(error))
     torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1)
     torch.manual_seed(args.seed)
     random.seed(args.seed)
     np.random.seed(args.seed)
     (args.output / 'ckpt').mkdir(parents=True, exist_ok=True)
-    train = PairedDataset(args.data)
+    train = PairedDataset(args.data, crop=args.crop)
     ids = validation_ids(args.data)
-    val = PairedDataset(args.data, 'val', ids)
+    val = PairedDataset(args.data, 'val', ids, crop=args.crop)
     if args.benchmark:
         benchmark(args, train, val)
     else:

@@ -78,17 +78,19 @@ class SemanticTests(unittest.TestCase):
     def test_semantic_model_uses_softmax_and_lazy_loading(self):
         torch.set_num_threads(2)
         with patch('fake_thermal.semantic.deeplabv3_mobilenet_v3_large') as factory:
-            semantic = SemanticPrior(size=32)
+            semantic = SemanticPrior(size=32, device='cpu')
             factory.assert_not_called()
             logits = torch.zeros((1, 21, 32, 48))
             logits[:, 15] = 3
-            factory.return_value.eval.return_value.return_value = {'out': logits}
+            factory.return_value.eval.return_value.to.return_value.return_value = {'out': logits}
             prior, confidence = semantic(np.zeros((16, 24, 3), np.uint8), (8, 12))
             self.assertEqual(prior.shape, (8, 12))
             self.assertTrue(((confidence > 0) & (confidence < 1)).all())
             self.assertGreater(float(prior.mean()), .8)
             semantic(np.zeros((16, 24, 3), np.uint8), (8, 12))
             factory.assert_called_once_with(weights=semantic.weights)
+            factory.return_value.eval.return_value.to.assert_called_once_with(
+                device=torch.device('cpu'), dtype=torch.float32)
 
     def test_convert_controls_without_network(self):
         with tempfile.TemporaryDirectory() as directory:

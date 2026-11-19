@@ -21,6 +21,21 @@ all local network interfaces; use only on a trusted machine/network.
 
 ## Media behavior
 
+- `--device auto|cpu|mps|cuda` applies to both models. Auto selects CUDA, then
+  MPS, then CPU. Device choice is also available in the UI, and final timing
+  JSON includes the effective device. Model weights/inputs are fp32 on every
+  device; MPS entry points enable CPU fallback for unsupported Torch ops.
+  CPU-based guided filtering, palettes, decode and encoding remain on CPU.
+  CUDA and MPS need compatible platform PyTorch wheels and hardware; they were
+  not hardware-tested on this host.
+- `--auto-contrast` defaults on (also in UI). Immediately before palette
+  mapping, guided full-size heat is stretched between its 2nd/99.5th percentiles.
+  Bounds retain 90% of their previous value per frame, resetting with the heat
+  smoother on a detected cut or shape change. Constant/near-flat maps retain
+  their original intensity instead of dividing by zero. `--no-auto-contrast`
+  restores fixed intensity display. Raw heat exports are **not** display
+  normalized. The stretch changes only presentation, not temperature estimates.
+
 - CPU inference defaults to **two Torch threads**, OpenCV one thread and one
   thread per ffmpeg codec/filter pipeline. Training is not stopped or altered.
 - Working short side defaults to **384**. The model pads to multiples of 32 and
@@ -71,7 +86,24 @@ Checkpoint export uses pickle and must only read trusted checkpoints. Normal
 inference uses `weights_only=True`. Early weights are bundled under the
 [non-commercial/research weights notice](../fake_thermal/weights/README.md); media are not committed.
 
-## Semantic-prior demos (iteration 3500 weights)
+## Latest display-contrast demos
+
+The semantic-on videos and the six `*_semantic_frame_*.jpg` images below were
+regenerated with `--device auto --auto-contrast`. Auto selected CPU on this host.
+The newest available best checkpoint was re-exported and is still iteration
+3500 / validation L1 0.184265. Training was left running. Bounds use a .9 EMA
+of 2nd/99.5th heat percentiles, reset on cuts. Raw heat is unchanged by display
+contrast. Logs: `outputs/demo/{kaist,commons}_auto_contrast.log`.
+
+The regenerated clips ran at 3.69 fps (KAIST) and 3.93 fps (Commons), including
+loading/encoding while training continued. Sample frames were inspected: the
+stretch increases visible dynamic range and makes close-up people brighter,
+but the KAIST building remains bright because percentile mapping preserves the
+model's relative heat ordering. It cannot selectively cool incorrect hot
+background predictions. Updated UI controls have callback tests but remain
+visually unverified; CUDA/MPS hardware execution is also unverified here.
+
+## Semantic-prior timing (before display contrast, iteration 3500 weights)
 
 Both demos were regenerated with ironbow, side-by-side, guided upsampling,
 default model size 384, default semantic size 320 and strength .7. The same
@@ -152,7 +184,11 @@ improve detail; neither these demos nor the final model measure temperature.
 
 ## Checks
 
-`python -m unittest discover -s tests -v`: 18 tests passed, including semantic
+`python -m unittest discover -s tests -v`: 26 tests passed, including device
+auto priority/unavailable choices, CPU fp32 transfers, training overrides,
+synthetic CPU training/validation/checkpointing with a custom crop, UI option
+forwarding/errors, percentile EMA/cut reset/constant handling and raw invariance,
+as well as semantic
 soft probability mapping, never-cooling/zero-strength fusion, synthetic flame
 and bright-white/negative-color patches, guided edge/shape/empty handling,
 mocked lazy segmentation and semantic controls without network access, palette

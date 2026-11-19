@@ -7,6 +7,8 @@ from torchvision.models.segmentation import (
     deeplabv3_mobilenet_v3_large,
 )
 
+from fake_thermal.device import select_device
+
 
 CLASS_HEAT = {
     'person': .9,
@@ -46,22 +48,25 @@ def fuse_heat(model, prior, confidence, strength=.7):
 
 
 class SemanticPrior:
-    def __init__(self, size=320):
+    def __init__(self, size=320, device='auto'):
         self.size = size
+        self.device = select_device(device)
         self.weights = DeepLabV3_MobileNet_V3_Large_Weights.DEFAULT
         self.model = None
 
     @torch.inference_mode()
     def __call__(self, rgb, output_shape):
         if self.model is None:
-            self.model = deeplabv3_mobilenet_v3_large(weights=self.weights).eval()
+            self.model = deeplabv3_mobilenet_v3_large(weights=self.weights).eval().to(
+                device=self.device, dtype=torch.float32)
         h, w = rgb.shape[:2]
         size = (round(w * self.size / min(h, w)), round(h * self.size / min(h, w)))
         small = cv2.resize(rgb, size, interpolation=cv2.INTER_AREA)
         x = torch.from_numpy(small.copy()).permute(2, 0, 1).unsqueeze(0).float() / 255
+        x = x.to(self.device)
         x = (x - x.new_tensor([.485, .456, .406])[None, :, None, None]) / x.new_tensor(
             [.229, .224, .225])[None, :, None, None]
-        probabilities = self.model(x)['out'][0].softmax(0).numpy()
+        probabilities = self.model(x)['out'][0].softmax(0).cpu().numpy()
         prior, confidence = probability_prior(probabilities, self.weights.meta['categories'])
         emissive, emissive_confidence = emissive_prior(small)
         total = confidence + emissive_confidence

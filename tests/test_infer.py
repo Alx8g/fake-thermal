@@ -15,7 +15,7 @@ from fake_thermal.model import ThermalUNet
 
 class PaletteTests(unittest.TestCase):
     def test_bundled_default_weights(self):
-        heat = Predictor(size=64, threads=2)(np.zeros((64, 64, 3), dtype=np.uint8))
+        heat = Predictor(size=64, threads=2, device='cpu')(np.zeros((64, 64, 3), dtype=np.uint8))
         self.assertEqual(heat.shape, (64, 64))
         self.assertTrue(np.isfinite(heat).all())
         self.assertTrue(((heat >= 0) & (heat <= 1)).all())
@@ -67,7 +67,7 @@ class CLIIntegrationTests(unittest.TestCase):
 
     def cli(self, source, output, *options):
         return subprocess.run([str(Path(sys.executable).with_name('fake-thermal')), str(source), '-o', str(output), '--size', '64',
-                               '--weights', str(self.weights), '--no-semantic', *options], capture_output=True, text=True)
+                               '--weights', str(self.weights), '--no-semantic', '--device', 'cpu', *options], capture_output=True, text=True)
 
     def test_video_audio_frames_fps_and_raw(self):
         output = self.root / 'converted.mp4'
