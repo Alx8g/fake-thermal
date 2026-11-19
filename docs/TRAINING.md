@@ -208,3 +208,27 @@ EMA checkpointing exists to smooth exactly that). The combined arm shows no
 additive gain at this length, within run-to-run noise of EMA alone. Future
 runs use `--frequency-alpha 1 --ema-decay 0.999`. Artifacts:
 `outputs/ablation/{base,ffl,ema,both}/`.
+
+### Style-conditioning A/B (same protocol, FFL+EMA both on)
+
+| Configuration | Best validation L1 |
+| --- | ---: |
+| FFL + EMA | 0.185551 |
+| + `--conditioning` | **0.183667** (−1.0%) |
+
+FLIR improved most (0.1863 → 0.1752, −6%) while night-time LLVIP slightly
+regressed (0.2265 → 0.2321): consistent with the night analysis — the FiLM
+head helps where RGB carries recoverable signal and cannot add what dark
+frames lack. Conditioned runs are recommended for day-domain accuracy;
+unconditioned remains reasonable where night performance dominates.
+Artifacts: `outputs/cond/`.
+
+### FLIR video pair rescue (Phase 3 full pass)
+
+3,405 of the 3,747 excluded unaligned video frames (90.8%) registered
+successfully under the 0.30 residual gate and were saved to
+`data/pairs-video/` (residuals p50=0.16, p90=0.29). One recording
+(`video-msNEBxJE5PPDqenBM`) passed only 49% and is flagged for inspection.
+**Not yet used for training** — the QA contact sheet
+`outputs/video_rescue_preview.jpg` requires human review first, per the
+roadmap gate.
