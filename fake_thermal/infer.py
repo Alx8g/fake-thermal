@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from fake_thermal.model import ThermalUNet
 
-DEFAULT_WEIGHTS = Path(__file__).resolve().parents[1] / 'weights/fake_thermal.pt'
+DEFAULT_WEIGHTS = Path(__file__).resolve().parent / 'weights/fake_thermal.pt'
 PALETTES = {
     'white-hot': [(0, 0, 0), (255, 255, 255)],
     'black-hot': [(255, 255, 255), (0, 0, 0)],

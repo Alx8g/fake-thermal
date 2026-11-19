@@ -9,11 +9,17 @@ import numpy as np
 from PIL import Image
 import torch
 
-from fake_thermal.infer import apply_palette, PALETTES, TemporalSmoother, probe
+from fake_thermal.infer import apply_palette, PALETTES, TemporalSmoother, probe, Predictor
 from fake_thermal.model import ThermalUNet
 
 
 class PaletteTests(unittest.TestCase):
+    def test_bundled_default_weights(self):
+        heat = Predictor(size=64, threads=2)(np.zeros((64, 64, 3), dtype=np.uint8))
+        self.assertEqual(heat.shape, (64, 64))
+        self.assertTrue(np.isfinite(heat).all())
+        self.assertTrue(((heat >= 0) & (heat <= 1)).all())
+
     def test_endpoints_and_clamping(self):
         for name, anchors in PALETTES.items():
             result = apply_palette(np.array([[-1., 0., 1., 2.]]), name)

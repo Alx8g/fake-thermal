@@ -11,6 +11,6 @@ permissively licensed data.** The repository's MIT license applies to code,
 not these weights or datasets. Upstream terms apply and this notice does not
 grant additional rights; verify permissions before use or redistribution.
 
-See the [README weights license and dataset credits](../README.md#weights-license)
-and [dataset report](../docs/DATA_REPORT.md). Export newer trusted checkpoints
+See the [README weights license and dataset credits](../../README.md#weights-license)
+and [dataset report](../../docs/DATA_REPORT.md). Export newer trusted checkpoints
 with `python scripts/export_weights.py outputs/ckpt/best.pt` from the repo root.

@@ -3,6 +3,7 @@ data/
 outputs/
 __pycache__/
 *.pyc
-weights/*.pt
-!weights/fake_thermal.pt
+**/weights/*.pt
+!fake_thermal/weights/fake_thermal.pt
 *.egg-info/
+build/

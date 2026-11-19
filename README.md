@@ -35,7 +35,7 @@ python -m pip install -e .
 ```
 
 No GPU or dataset download is needed for inference. The checkout includes the
-approximately 24 MB `weights/fake_thermal.pt` fp16 state dict; the CPU model runs
+approximately 24 MB `fake_thermal/weights/fake_thermal.pt` fp16 state dict; the CPU model runs
 in fp32. See the separate **weights license** below before using it.
 
 ## CLI
@@ -44,7 +44,7 @@ in fp32. See the separate **weights license** below before using it.
 fake-thermal input.mov -o out.mp4 --palette ironbow
 fake-thermal input.mov -o comparison.mp4 --side-by-side --size 512 --smoothing .65 --raw
 fake-thermal photo.jpg -o thermal.png --palette arctic
-fake-thermal input.mov -o out.mp4 --weights weights/fake_thermal.pt
+fake-thermal input.mov -o out.mp4 --weights fake_thermal/weights/fake_thermal.pt
 ```
 
 Palettes: **ironbow**, **white-hot**, **black-hot**, **rainbow**, **arctic**.
@@ -116,7 +116,7 @@ their own licenses.
 
 ## Weights license
 
-The bundled `weights/fake_thermal.pt` was trained on **LLVIP, KAIST and FLIR**,
+The bundled `fake_thermal/weights/fake_thermal.pt` was trained on **LLVIP, KAIST and FLIR**,
 which carry research/non-commercial terms or other restrictions. **Weights are
 for non-commercial/research use only until retrained on permissively licensed
 data.** They are not MIT-licensed. Upstream terms still apply; this notice does
@@ -124,7 +124,7 @@ not grant rights beyond those terms, and unrestricted redistribution or
 commercial use is not established. Verify upstream permissions for your use.
 
 The included early checkpoint is iteration 2,000 (validation L1 0.191197), not
-the final training result. See [weights notice](weights/README.md).
+the final training result. See [weights notice](fake_thermal/weights/README.md).
 
 ## Tests
 

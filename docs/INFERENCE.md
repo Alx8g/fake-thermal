@@ -6,7 +6,7 @@
 .venv/bin/pip install -e .
 .venv/bin/python scripts/export_weights.py outputs/ckpt/best.pt
 .venv/bin/fake-thermal input.mov -o out.mp4 --palette ironbow --side-by-side --raw
-.venv/bin/fake-thermal input.mov -o out.mp4 --size 512 --smoothing .5 --weights weights/fake_thermal.pt
+.venv/bin/fake-thermal input.mov -o out.mp4 --size 512 --smoothing .5 --weights fake_thermal/weights/fake_thermal.pt
 .venv/bin/fake-thermal input.jpg -o out.png --palette white-hot
 .venv/bin/python app.py
 ```
@@ -44,13 +44,13 @@ all local network interfaces; use only on a trusted machine/network.
 - Images support PNG/JPEG/WebP output; grayscale PNG is recommended for editors.
   Existing result files can be overwritten, but input=output is rejected.
 
-Default weights are `weights/fake_thermal.pt`, an fp16 **state dict** exported
+Default weights are `fake_thermal/weights/fake_thermal.pt`, an fp16 **state dict** exported
 from trusted local training checkpoints. Inference loads those weights into an
 fp32 CPU model. The local export is approximately 24 MiB, from **iteration 2000**,
 validation L1 **0.191197**. Re-export after training to use improved weights.
 Checkpoint export uses pickle and must only read trusted checkpoints. Normal
 inference uses `weights_only=True`. Early weights are bundled under the
-[non-commercial/research weights notice](../weights/README.md); media are not committed.
+[non-commercial/research weights notice](../fake_thermal/weights/README.md); media are not committed.
 
 ## Demos run while training continued
 

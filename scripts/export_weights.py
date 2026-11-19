@@ -8,7 +8,8 @@ import torch
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('checkpoint', type=Path)
-    parser.add_argument('-o', '--output', type=Path, default=Path('weights/fake_thermal.pt'))
+    parser.add_argument('-o', '--output', type=Path,
+                        default=Path(__file__).resolve().parents[1] / 'fake_thermal/weights/fake_thermal.pt')
     args = parser.parse_args()
     torch.set_num_threads(2)
     checkpoint = torch.load(args.checkpoint, map_location='cpu', weights_only=False)

@@ -14,3 +14,6 @@ fake-thermal = "fake_thermal.infer:main"
 
 [tool.setuptools.packages.find]
 include = ["fake_thermal*"]
+
+[tool.setuptools.package-data]
+fake_thermal = ["weights/*.pt", "weights/README.md"]
