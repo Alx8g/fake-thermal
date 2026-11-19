@@ -98,7 +98,7 @@ class DeviceTests(unittest.TestCase):
                     decoder.stdout.read.return_value = b''
                     decoder.wait.return_value = code
                     decoder.poll.return_value = encoder.poll.return_value = 0
-                    with patch('fake_thermal.infer.Predictor'), patch('fake_thermal.infer.probe', return_value=(64, 64, '6/1', 0)), patch('fake_thermal.infer.subprocess.Popen', side_effect=[decoder, encoder]):
+                    with patch('fake_thermal.infer.Predictor'), patch('fake_thermal.infer.probe', return_value=(64, 64, '6/1', 0)), patch('fake_thermal.infer.fps_mode_args', return_value=['-fps_mode', 'passthrough']), patch('fake_thermal.infer.subprocess.Popen', side_effect=[decoder, encoder]):
                         with self.assertRaises(ValueError) as caught:
                             convert(source, Path(directory) / 'out.mp4', semantic=False, device='cpu')
                     self.assertEqual(str(caught.exception), UNREADABLE_MEDIA)
