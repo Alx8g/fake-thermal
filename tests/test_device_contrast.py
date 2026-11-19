@@ -46,15 +46,15 @@ class DeviceTests(unittest.TestCase):
             Image.new('RGB', (32, 32)).save(source)
             with patch('app.convert') as converter:
                 converter.return_value = dict(frames=1, seconds=1., fps=1., raw=None, device='cpu')
-                result = app.run_media(str(source), 'ironbow', False, .65, False, False, .7, 'cpu', False)
+                result = app.run_media(str(source), 'ironbow', False, .65, False, False, .7, 'cpu', False, True)
                 self.assertEqual(converter.call_args.kwargs['device'], 'cpu')
                 self.assertFalse(converter.call_args.kwargs['auto_contrast'])
                 self.assertIn('cpu', result[-1])
                 converter.side_effect = ValueError('invalid device')
                 with self.assertRaises(app.gr.Error):
-                    app.run_media(str(source), 'ironbow', False, .65, False, False, .7, 'bad', True)
+                    app.run_media(str(source), 'ironbow', False, .65, False, False, .7, 'bad', True, True)
             with self.assertRaises(app.gr.Error):
-                app.run_media(None, 'ironbow', False, .65, False, False, .7, 'cpu', True)
+                app.run_media(None, 'ironbow', False, .65, False, False, .7, 'cpu', True, True)
 
     def test_training_overrides_and_missing_config(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -84,7 +84,7 @@ class DeviceTests(unittest.TestCase):
             source.write_text('not media')
             with patch('app.ROOT', Path(directory)), patch('fake_thermal.infer.Predictor'):
                 with self.assertRaises(app.gr.Error) as caught:
-                    app.run_media(str(source), 'ironbow', False, .65, False, False, .7, 'cpu', True)
+                    app.run_media(str(source), 'ironbow', False, .65, False, False, .7, 'cpu', True, True)
             self.assertEqual(caught.exception.message, UNREADABLE_MEDIA)
             self.assertNotIn(str(source), str(caught.exception))
 
