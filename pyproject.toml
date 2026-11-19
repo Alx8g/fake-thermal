@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fake-thermal"
+version = "0.1.0"
+description = "CPU-friendly RGB-to-relative-thermal image and video conversion"
+requires-python = ">=3.10"
+dependencies = ["torch", "torchvision", "numpy", "pillow", "opencv-python-headless", "tqdm", "gradio>=5,<7"]
+
+[project.scripts]
+fake-thermal = "fake_thermal.infer:main"
+
+[tool.setuptools.packages.find]
+include = ["fake_thermal*"]
+
+[tool.setuptools.package-data]
+fake_thermal = ["weights/*.pt", "weights/README.md"]
