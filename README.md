@@ -1,4 +1,14 @@
-# thermalize — data preparation
+# fake-thermal
+
+CPU-friendly RGB-to-relative-thermal prediction. Public repository:
+https://github.com/Alx8g/fake-thermal (origin configured; not pushed).
+The local checkout remains `~/repos/thermalize`.
+
+See [TRAINING.md](TRAINING.md) for the ResNet18 U-Net, CPU benchmark, training
+commands, checkpoints and validation protocol. Predictions are normalized
+white-hot relative intensity, **not measured temperatures**.
+
+## Data preparation
 
 **Current dataset:** see [DATA_REPORT.md](DATA_REPORT.md) for the full LLVIP +
 subsampled KAIST expansion, current counts and per-source previews. The remainder
