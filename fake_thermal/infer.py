@@ -16,6 +16,7 @@ from tqdm import tqdm
 from fake_thermal.model import ThermalUNet
 from fake_thermal.device import DEVICES, memory_format, select_device
 from fake_thermal.semantic import SemanticPrior, fuse_heat, guided_upsample
+from fake_thermal.sensor import ThermalSensor
 
 DEFAULT_WEIGHTS = Path(__file__).resolve().parent / 'weights/fake_thermal.pt'
 UNREADABLE_MEDIA = "Couldn't read this file as a video or image — try an MP4/MOV/JPG/PNG."
@@ -217,7 +218,7 @@ def mux_audio(video, original, output):
 def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=False,
             weights=DEFAULT_WEIGHTS, smoothing=.65, raw=False, threads=2,
             semantic=True, semantic_strength=.7, device='auto', auto_contrast=True,
-            flow=True):
+            flow=True, sensor=True):
     start = time.perf_counter()
     source, output = Path(input_path), Path(output_path)
     if source.resolve() == output.resolve():
@@ -230,6 +231,7 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
         raise ValueError('Semantic strength must be between 0 and 1')
     smoother = TemporalSmoother(smoothing, flow=flow)
     selected_device = select_device(device)
+    sensor_sim = ThermalSensor() if sensor else None
     predictor = Predictor(weights, size, threads, selected_device.type)
     semantic_predictor = SemanticPrior(device=selected_device.type) if semantic and semantic_strength > 0 else None
     normalizer = DisplayNormalizer() if auto_contrast else None
@@ -255,6 +257,8 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
         if raw_path is not None and source.resolve() == raw_path.resolve():
             raise ValueError('Input and raw output must be different files')
         heat = guided_upsample(predict_heat(rgb), rgb)
+        if sensor_sim is not None:
+            heat = sensor_sim.update(heat)
         colored = apply_palette(normalizer.update(heat) if normalizer else heat, palette)
         Image.fromarray(np.concatenate([rgb, colored], axis=1) if side_by_side else colored).save(output)
         if raw:
@@ -287,6 +291,8 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
                             rgb = np.frombuffer(buffer, dtype=np.uint8).reshape(h, w, 3)
                             heat = smoother.update(predict_heat(rgb), rgb)
                             heat = guided_upsample(heat, rgb)
+                            if sensor_sim is not None:
+                                heat = sensor_sim.update(heat)
                             display = normalizer.update(heat, reset=smoother.reset_history) if normalizer else heat
                             colored = apply_palette(display, palette)
                             enc.stdin.write((np.concatenate([rgb, colored], axis=1) if side_by_side else colored).tobytes())
@@ -346,12 +352,14 @@ def main():
                         help='temporally stable percentile display contrast (default on; raw is unaffected)')
     parser.add_argument('--flow-smoothing', action=argparse.BooleanOptionalAction, default=True,
                         help='carry the previous heat map along estimated motion with occlusion masking (default on)')
+    parser.add_argument('--sensor-sim', action=argparse.BooleanOptionalAction, default=True,
+                        help='add measured microbolometer noise, banding and vignette (default on)')
     args = parser.parse_args()
     try:
         convert(args.input, args.output, args.palette, args.size, args.side_by_side,
                 args.weights, args.smoothing, args.raw, args.threads,
                 args.semantic, args.semantic_strength, args.device, args.auto_contrast,
-                args.flow_smoothing)
+                args.flow_smoothing, args.sensor_sim)
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
         parser.exit(1, f'fake-thermal: {error}\n')
 

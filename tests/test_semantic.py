@@ -99,7 +99,7 @@ class SemanticTests(unittest.TestCase):
             with patch('fake_thermal.infer.Predictor') as model, patch('fake_thermal.infer.SemanticPrior') as semantic:
                 model.return_value.return_value = np.full((8, 8), .2, np.float32)
                 semantic.return_value.return_value = (np.full((8, 8), .9, np.float32), np.ones((8, 8), np.float32))
-                convert(source, output, semantic=True, semantic_strength=.7, palette='white-hot')
+                convert(source, output, semantic=True, semantic_strength=.7, palette='white-hot', sensor=False)
                 self.assertGreater(np.asarray(Image.open(output)).mean(), 150)
                 semantic.return_value.assert_called_once()
                 semantic.reset_mock()

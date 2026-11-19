@@ -46,15 +46,15 @@ class DeviceTests(unittest.TestCase):
             Image.new('RGB', (32, 32)).save(source)
             with patch('app.convert') as converter:
                 converter.return_value = dict(frames=1, seconds=1., fps=1., raw=None, device='cpu')
-                result = app.run_media(str(source), 'ironbow', False, .65, False, False, .7, 'cpu', False, True)
+                result = app.run_media(str(source), "ironbow", False, .65, False, False, .7, "cpu", False, True, True)
                 self.assertEqual(converter.call_args.kwargs['device'], 'cpu')
                 self.assertFalse(converter.call_args.kwargs['auto_contrast'])
                 self.assertIn('cpu', result[-1])
                 converter.side_effect = ValueError('invalid device')
                 with self.assertRaises(app.gr.Error):
-                    app.run_media(str(source), 'ironbow', False, .65, False, False, .7, 'bad', True, True)
+                    app.run_media(str(source), "ironbow", False, .65, False, False, .7, "bad", True, True, True)
             with self.assertRaises(app.gr.Error):
-                app.run_media(None, 'ironbow', False, .65, False, False, .7, 'cpu', True, True)
+                app.run_media(None, "ironbow", False, .65, False, False, .7, "cpu", True, True, True)
 
     def test_training_overrides_and_missing_config(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -84,7 +84,7 @@ class DeviceTests(unittest.TestCase):
             source.write_text('not media')
             with patch('app.ROOT', Path(directory)), patch('fake_thermal.infer.Predictor'):
                 with self.assertRaises(app.gr.Error) as caught:
-                    app.run_media(str(source), 'ironbow', False, .65, False, False, .7, 'cpu', True, True)
+                    app.run_media(str(source), "ironbow", False, .65, False, False, .7, "cpu", True, True, True)
             self.assertEqual(caught.exception.message, UNREADABLE_MEDIA)
             self.assertNotIn(str(source), str(caught.exception))
 
@@ -186,7 +186,7 @@ class ContrastTests(unittest.TestCase):
                 predictor.return_value.return_value = heat
                 for enabled in (True, False):
                     convert(source, root / f'out_{enabled}.png', palette='white-hot', raw=True,
-                            semantic=False, device='cpu', auto_contrast=enabled)
+                            semantic=False, device='cpu', auto_contrast=enabled, sensor=False)
                 with Image.open(root / 'out_True.png') as im:
                     displayed = np.asarray(im)
                     self.assertEqual((displayed.min(), displayed.max()), (0, 255))
