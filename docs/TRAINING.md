@@ -191,3 +191,20 @@ slower than contiguous on MPS even with PyTorch 2.15's Metal backward path —
 the defaults (fp32/contiguous on MPS) stay. End-to-end CLI throughput on the
 same machine (640×512 input, working size 384, x264 crf 18): **12.3 fps** with
 the semantic prior, **21.3 fps** without (`--no-semantic`).
+
+### Loss-configuration ablation (3,000 iterations, fp16, batch 16)
+
+| Configuration | Best validation L1 | Δ vs base |
+| --- | ---: | ---: |
+| base (L1 + SSIM + gradient) | 0.187308 | — |
+| + focal frequency (`--frequency-alpha 1`) | **0.183800** | −1.9% |
+| + weight EMA (`--ema-decay 0.999`) | 0.185505 | −1.0% |
+| + both | 0.185551 | −0.9% |
+
+The frequency loss is the clear short-run win, improving every source; EMA
+also improves checkpointed weights within 3k iterations, though its benefit
+compounds on full schedules (the shipped 30k run peaked at iteration 17,500 —
+EMA checkpointing exists to smooth exactly that). The combined arm shows no
+additive gain at this length, within run-to-run noise of EMA alone. Future
+runs use `--frequency-alpha 1 --ema-decay 0.999`. Artifacts:
+`outputs/ablation/{base,ffl,ema,both}/`.
