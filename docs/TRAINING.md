@@ -246,6 +246,28 @@ loss (`--lpips-alpha 0.25`)** to break the L1-blur equilibrium; the realism
 benchmark, not validation L1, is the metric of record for this campaign.
 Artifacts: `outputs/realism_v3.json`, `outputs/morning_v3.png`, `outputs/v3/`.
 
+### v4: perceptual training loss (the realism campaign's metric of record)
+
+20,000 iterations at 448-crop on 512px data, identical to v3 plus
+`--lpips-alpha 0.25` (LPIPS-AlexNet added to the loss). Results:
+
+| Metric | v3 | v4 |
+| --- | ---: | ---: |
+| LPIPS on the 512px val split | 0.7727 | **0.4794** (−38%) |
+| Raw model output texture (Laplacian var) | ~0.4 | **15.4** |
+| Validation L1 | 0.1646 | 0.1666 |
+| Real-vs-fake classifier (deployed pipeline) | 94.2% | 95.5% |
+
+The perceptual loss works — LPIPS dropped 38% and the model's own output
+gained ~40x texture — but at this weight and schedule it does not yet close
+the visual gap (Luna: "visibly better, still clearly distinguishable; the
+missing piece is scene-aligned structural detail"). EMA checkpointing does
+not blur the gain (EMA 15.0 vs raw 15.4), and the guided edge-transfer stage
+is not the bottleneck (classifier identical with or without it). Remaining
+levers: perceptual weight (0.5/1.0) and schedule length (50k), packaged as
+the v5 arms in `scripts/cloud_run.py`. Artifacts: `outputs/eval_v4.json`,
+`outputs/realism_v4.json`, `outputs/morning_v4.png`, `outputs/v4/`.
+
 ### Full-length recipe comparison (v2, 30k iterations)
 
 The v2 run stacked every validated ingredient — focal frequency loss, weight
