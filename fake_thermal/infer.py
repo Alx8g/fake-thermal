@@ -135,16 +135,20 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
     if rgb is not None:
         if output.suffix.lower() not in ('.png', '.jpg', '.jpeg', '.webp'):
             raise ValueError('For an image, use a .png/.jpg/.webp output')
+        raw_path = output.with_name(output.stem + '_raw.png') if raw else None
+        if raw_path is not None and source.resolve() == raw_path.resolve():
+            raise ValueError('Input and raw output must be different files')
         heat = cv2.resize(predictor(rgb), (rgb.shape[1], rgb.shape[0]), interpolation=cv2.INTER_LINEAR)
         colored = apply_palette(heat, palette)
         Image.fromarray(np.concatenate([rgb, colored], axis=1) if side_by_side else colored).save(output)
         if raw:
-            raw_path = output.with_name(output.stem + '_raw.png')
             Image.fromarray(np.rint(heat * 255).astype(np.uint8)).save(raw_path)
         frames = 1
     else:
         if output.suffix.lower() != '.mp4':
             raise ValueError('Video output must be .mp4')
+        if raw_path is not None and source.resolve() == raw_path.resolve():
+            raise ValueError('Input and raw output must be different files')
         w, h, fps, total = probe(source)
         frames = 0
         with tempfile.TemporaryDirectory(prefix='fake-thermal-', dir=output.parent) as temporary:

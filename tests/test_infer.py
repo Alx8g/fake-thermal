@@ -100,6 +100,19 @@ class CLIIntegrationTests(unittest.TestCase):
         self.assertNotEqual(self.cli(source, source).returncode, 0)
         self.assertNotEqual(self.cli(self.root / 'missing.mov', output).returncode, 0)
 
+    def test_raw_image_cannot_overwrite_input(self):
+        source = self.root / 'holiday_raw.png'
+        Image.new('RGB', (75, 53), 'orange').save(source)
+        original = source.read_bytes()
+        for suffix in ('.png', '.jpg'):
+            with self.subTest(suffix=suffix):
+                output = self.root / ('holiday' + suffix)
+                result = self.cli(source, output, '--raw')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Input and raw output must be different files', result.stderr)
+                self.assertEqual(source.read_bytes(), original)
+                self.assertFalse(output.exists())
+
 
 if __name__ == '__main__':
     unittest.main()
