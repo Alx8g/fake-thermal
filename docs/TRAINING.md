@@ -227,8 +227,13 @@ Artifacts: `outputs/cond/`.
 
 3,405 of the 3,747 excluded unaligned video frames (90.8%) registered
 successfully under the 0.30 residual gate and were saved to
-`data/pairs-video/` (residuals p50=0.16, p90=0.29). One recording
-(`video-msNEBxJE5PPDqenBM`) passed only 49% and is flagged for inspection.
-**Not yet used for training** — the QA contact sheet
-`outputs/video_rescue_preview.jpg` requires human review first, per the
-roadmap gate.
+`data/pairs-video/` (residuals p50=0.16, p90=0.29). **Two-round visual QA**
+(full-resolution overlay crops judged independently): the clean recordings
+pass 12/12 judgeable crops with no systematic offset, scale or rotation
+residue; the recording `video-msNEBxJE5PPDqenBM` failed throughout (0/6,
+49% gate pass) and was **excluded** (moved to `data/pairs-video-rejected/`).
+The remaining **3,193 pairs are integrated into `data/pairs/train/`** with
+the `video_` source prefix — the balanced sampler weights them as one
+source alongside FLIR/KAIST/LLVIP. QA artifacts:
+`outputs/rescue_overlay_blink.mp4`, `outputs/rescue_zoom.png`,
+`outputs/rescue_fringe.png`.
