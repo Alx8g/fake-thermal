@@ -53,7 +53,7 @@ fake-thermal input.mov -o out.mp4 --device auto --auto-contrast
 fake-thermal input.mov -o fixed-display.mp4 --device cpu --no-auto-contrast
 ```
 
-Palettes: **ironbow**, **white-hot**, **black-hot**, **rainbow**, **arctic**.
+Palettes: **ironbow**, **white-hot**, **black-hot**, **rainbow**, **arctic**, **lava**, **glowbow**.
 Default working short side is 384; output returns to source resolution.
 Inference defaults to two CPU threads (`--threads 2`). Temporal smoothing
 defaults to motion-compensated propagation: the previous heat map is carried
