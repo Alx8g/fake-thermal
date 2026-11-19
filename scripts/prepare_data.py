@@ -20,6 +20,9 @@ def download(raw):
             ('jsonhash/FLIR_aligned', 'aligned.zip', 'flir')]
     jobs += [('Maxim37/flir_adas_video_pairs', f'data/test-{i:05d}-of-00004.parquet', 'video')
              for i in range(4)]
+    jobs += [('jsonhash/LLVIP', 'LLVIP.zip', 'llvip_full'),
+             ('AmineMarnissi/ThermalKaist', 'RGBKaist.zip', 'kaist'),
+             ('AmineMarnissi/ThermalKaist', 'thermalKaist.zip', 'kaist')]
     for repo, filename, source in jobs:
         hf_hub_download(repo, filename, repo_type='dataset', local_dir=raw / source)
 
@@ -69,6 +72,85 @@ def panel(rgb, thermal, label):
     return tile
 
 
+def save_sheet(tiles, path):
+    sheet = Image.new('RGB', (1280, ((len(tiles) + 1) // 2) * 190), 'white')
+    for i, tile in enumerate(tiles):
+        sheet.paste(tile, ((i % 2) * 640, (i // 2) * 190))
+    sheet.save(path, quality=92)
+
+
+def kaist_index(names, modality):
+    return {Path(n).stem.replace(f'_{modality}_', '_'): n for n in names
+            if '/JPEGImages/' in n and n.endswith('.png')}
+
+
+def subsample_sequences(keys, stride=5):
+    sequences = {}
+    for key in sorted(keys):
+        sequences.setdefault(key.rsplit('_', 1)[0], []).append(key)
+    return sorted(key for frames in sequences.values() for key in frames[::stride])
+
+
+def prepare_extra(raw, out, data, records, short_side):
+    summaries, all_tiles = {}, []
+
+    def emit(source, rz, tz, pairs, info):
+        counts, sizes, lighting = Counter(), Counter(), Counter()
+        tiles = []
+        sample = set(random.Random(42).sample(range(len(pairs)), min(12, len(pairs))))
+        for i, (key, r, t, split, group, light) in enumerate(tqdm(pairs, desc=source)):
+            with Image.open(rz.open(r)) as ri, Image.open(tz.open(t)) as ti:
+                sizes[str((ri.size, ti.size))] += 1
+                rgb, thermal = resize_pair(ri, ti, short_side)
+                stem = f'{source}_{key}'
+                rgb.save(out / split / 'rgb' / f'{stem}.jpg', quality=95)
+                thermal.save(out / split / 'thermal' / f'{stem}.png')
+                counts[split] += 1
+                lighting[f'{split}_{light}'] += 1
+                records.append({'source': source, 'id': stem, 'split': split,
+                                'group': group, 'lighting': light, 'rgb_member': r,
+                                'thermal_member': t})
+                if i in sample:
+                    tiles.append(panel(rgb, thermal, f'{source} {key} [{split}, {light}]'))
+        save_sheet(tiles, data / f'preview_{source}.jpg')
+        summaries[source] = dict(info, counts=dict(counts), resolutions=dict(sizes),
+                                 lighting=dict(lighting))
+        all_tiles.extend(tiles)
+
+    with zipfile.ZipFile(raw / 'llvip_full/LLVIP.zip') as z:
+        names = set(z.namelist())
+        pairs, scenes = [], {'train': set(), 'val': set()}
+        for r in sorted(n for n in names if '/visible/' in n and n.endswith('.jpg')):
+            t = r.replace('/visible/', '/infrared/')
+            if t not in names:
+                raise ValueError(f'Missing LLVIP thermal partner: {r}')
+            key = Path(r).stem
+            split = 'val' if '/test/' in r else 'train'
+            scenes[split].add(key[:2])
+            pairs.append((key, r, t, split, key[:2], 'low_light'))
+        if scenes['train'] & scenes['val']:
+            raise ValueError('LLVIP scene overlap between train and test')
+        emit('llvip', z, z, pairs, {'available_pairs': len(pairs),
+             'scenes': {k: sorted(v) for k, v in scenes.items()},
+             'split_policy': 'original train/test, disjoint two-digit scene prefixes'})
+    with zipfile.ZipFile(raw / 'kaist/RGBKaist.zip') as rz, \
+            zipfile.ZipFile(raw / 'kaist/thermalKaist.zip') as tz:
+        rgb, thermal = kaist_index(rz.namelist(), 'visible'), kaist_index(tz.namelist(), 'lwir')
+        matched = rgb.keys() & thermal.keys()
+        pairs = []
+        for key in subsample_sequences(matched):
+            set_id = int(key[3:5])
+            split = 'train' if set_id < 6 else 'val'
+            light = 'day' if set_id in (0, 1, 2, 6, 7, 8) else 'night'
+            pairs.append((key, rgb[key], thermal[key], split, key.rsplit('_', 1)[0], light))
+        emit('kaist', rz, tz, pairs, {'available_pairs': len(matched),
+             'unmatched_rgb': sorted(rgb.keys() - thermal.keys()),
+             'unmatched_thermal': sorted(thermal.keys() - rgb.keys()),
+             'split_policy': 'sets00-05 train / sets06-11 val; every fifth available matched frame per sequence',
+             'lighting_policy': 'KAIST set convention: 00-02/06-08 day, 03-05/09-11 night'})
+    return summaries, all_tiles
+
+
 def prepare(data, short_side=288):
     raw, out = data / 'raw', data / 'pairs'
     if out.exists() and any(out.rglob('*.*')):
@@ -101,12 +183,9 @@ def prepare(data, short_side=288):
                     thermal.save(out / split / 'thermal' / f'{stem}.png')
                 records.append({'source': 'jsonhash/FLIR_aligned', 'id': stem, 'split': split,
                                 'rgb_member': r, 'thermal_member': t})
-    with zipfile.ZipFile(raw / 'llvip/images.zip') as z:
-        names = sorted(n for n in z.namelist() if n.endswith('.jpg'))
-        modalities = Counter(n.split('/')[2] for n in names)
-        for n in rng.sample(names, min(12, len(names))):
-            with Image.open(z.open(n)) as im:
-                tiles.append(panel(im, None, f'LLVIP RGB only: {Path(n).name} - EXCLUDED'))
+    save_sheet(tiles, data / 'preview_flir.jpg')
+    extra_summary, extra_tiles = prepare_extra(raw, out, data, records, short_side)
+    tiles.extend(extra_tiles)
     video_count, video_groups, video_sizes = 0, Counter(), Counter()
     # Reservoir sampling over streamed batches avoids loading gigabytes of images into RAM.
     samples = []
@@ -124,15 +203,13 @@ def prepare(data, short_side=288):
                         samples.append(panel(ri, ti, 'FLIR video UNALIGNED - EXCLUDED'))
                     elif j < 12:
                         samples[j] = panel(ri, ti, 'FLIR video UNALIGNED - EXCLUDED')
+    save_sheet(samples, data / 'preview_video_excluded.jpg')
     tiles.extend(samples)
-    sheet = Image.new('RGB', (1280, ((len(tiles) + 1) // 2) * 190), 'white')
-    for i, tile in enumerate(tiles):
-        sheet.paste(tile, ((i % 2) * 640, (i // 2) * 190))
-    sheet.save(data / 'preview.jpg', quality=92)
+    save_sheet(tiles, data / 'preview.jpg')
     summary = {'flir': {'available_pairs': len(pairs), 'counts': dict(counts),
                        'resolutions': dict(resolutions), 'inferred_sequence_groups': groups,
                        'split_policy': 'whole index runs (gap >20), 150-index embargo around val; seed 42; approximate scenes only'},
-               'llvip': {'images': len(names), 'modalities': dict(modalities), 'usable_pairs': 0},
+               **extra_summary,
                'video': {'pairs': video_count, 'recordings': dict(video_groups),
                          'resolutions': dict(video_sizes), 'usable_pairs': 0}}
     (data / 'manifest.json').write_text(json.dumps(records, indent=2) + '\n')

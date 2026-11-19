@@ -1,5 +1,11 @@
 # thermalize — data preparation
 
+**Current dataset:** see [DATA_REPORT.md](DATA_REPORT.md) for the full LLVIP +
+subsampled KAIST expansion, current counts and per-source previews. The remainder
+of this README is the **historical initial audit**; its LLVIP/KAIST exclusions,
+download budget and output totals have been superseded. Reproduction commands
+below still apply; `--download` now fetches the full LLVIP and both KAIST ZIPs too.
+
 CPU-only groundwork for RGB-to-synthetic-thermal video translation. No model or
 training pipeline yet. These are display-intensity thermal images, not calibrated
 temperature measurements.

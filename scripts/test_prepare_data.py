@@ -3,10 +3,25 @@ import unittest
 
 from PIL import Image
 
-from prepare_data import resize_pair, sequence_split
+from prepare_data import kaist_index, resize_pair, sequence_split, subsample_sequences
 
 
 class PreparationTests(unittest.TestCase):
+    def test_kaist_pairs_by_set_sequence_and_frame(self):
+        rgb = kaist_index(['RGBKaist/JPEGImages/set00_V001_visible_I00001.png',
+                           'RGBKaist/JPEGImages/set01_V001_visible_I00001.png',
+                           'RGBKaist/Annotations/set00_V001_visible_I00001.xml'], 'visible')
+        thermal = kaist_index(['thermalKaist/JPEGImages/set00_V001_lwir_I00001.png'], 'lwir')
+        self.assertEqual(rgb.keys() & thermal.keys(), {'set00_V001_I00001'})
+        self.assertEqual(rgb.keys() - thermal.keys(), {'set01_V001_I00001'})
+        self.assertEqual(kaist_index([], 'visible'), {})
+
+    def test_subsample_resets_at_sequence_boundary(self):
+        keys = [f'set00_V{seq:03d}_I{n:05d}' for seq in range(2) for n in range(12)]
+        self.assertEqual(subsample_sequences(reversed(keys)),
+                         [f'set00_V{seq:03d}_I{n:05d}' for seq in range(2) for n in (0, 5, 10)])
+        self.assertEqual(subsample_sequences([]), [])
+
     def test_resize_and_modes(self):
         a, b = resize_pair(Image.new('RGB', (640, 512)), Image.new('RGB', (640, 512)))
         self.assertEqual(a.size, (360, 288))
