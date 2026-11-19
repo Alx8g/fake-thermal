@@ -1,131 +1,136 @@
 # fake-thermal
 
-CPU-friendly RGB-to-relative-thermal prediction. Public repository:
-https://github.com/Alx8g/fake-thermal (origin configured; not pushed).
-The local checkout remains `~/repos/thermalize`.
+Turn RGB videos and photos into a synthetic thermal-camera look, using a
+CPU-friendly ResNet18 U-Net trained on paired RGB/thermal images.
 
-## Convert a clip or photo
+**This predicts typical heat appearance, not measured temperature.** It cannot
+recover real thermal information from phone RGB sensors. Colors are relative
+predicted intensity, not Celsius/Fahrenheit. Predictions may be wrong: do not
+use them for medical, safety, surveillance decisions, or temperature measurement.
+The bundled weights are an early checkpoint and outputs can be blurry/coarse.
 
-Requires `ffmpeg` and `ffprobe` on PATH, plus the exported local weights:
+## Demo
 
-```sh
-.venv/bin/pip install -e .
-.venv/bin/python scripts/export_weights.py outputs/ckpt/best.pt
-.venv/bin/fake-thermal input.mov -o out.mp4 --palette ironbow --side-by-side
-.venv/bin/fake-thermal photo.jpg -o thermal.png --palette arctic --raw
-.venv/bin/python app.py  # upload/preview/download UI on port 7860
-```
+<!-- Placeholder: add RGB | predicted thermal demo images after training. -->
+*Demo images coming soon.* Local demo generation and video paths are documented
+in [Inference and demos](docs/INFERENCE.md).
 
-Palettes: `ironbow`, `white-hot`, `black-hot`, `rainbow`, `arctic`. Default working
-short side is 384 (`--size 512` for more detail); inference uses two CPU threads.
-`--smoothing .65` retains 65% of the prior heat map and resets on detected hard
-cuts; use `--smoothing 0` to disable. `--raw` adds a grayscale `_raw` file.
-See [INFERENCE.md](INFERENCE.md) for behavior, demos, speed and limitations.
+## Install (CPU, Python 3.10+)
 
-See [TRAINING.md](TRAINING.md) for the ResNet18 U-Net, CPU benchmark, training
-commands, checkpoints and validation protocol. Predictions are normalized
-white-hot relative intensity, **not measured temperatures**.
-
-## Data preparation
-
-**Current dataset:** see [DATA_REPORT.md](DATA_REPORT.md) for the full LLVIP +
-subsampled KAIST expansion, current counts and per-source previews. The remainder
-of this README is the **historical initial audit**; its LLVIP/KAIST exclusions,
-download budget and output totals have been superseded. Reproduction commands
-below still apply; `--download` now fetches the full LLVIP and both KAIST ZIPs too.
-
-CPU-only groundwork for RGB-to-synthetic-thermal video translation. No model or
-training pipeline yet. These are display-intensity thermal images, not calibrated
-temperature measurements.
-
-## Reproduce
+Install system **ffmpeg** (including ffprobe), then clone and install:
 
 ```sh
+# Ubuntu/Debian
+sudo apt-get update && sudo apt-get install -y ffmpeg
+git clone https://github.com/Alx8g/fake-thermal.git
+cd fake-thermal
 python3 -m venv .venv
-.venv/bin/pip install torch==2.14.1+cpu torchvision==0.29.2+cpu --index-url https://download.pytorch.org/whl/cpu
-.venv/bin/pip install -r requirements.txt
-.venv/bin/python scripts/prepare_data.py --download
-.venv/bin/python -m unittest discover -s scripts -p 'test_*.py' -v
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -e .
 ```
 
-The downloader fetches the three inspected archives/parquet sources, totaling
-approximately 3.77 GB compressed. KAIST is deliberately not downloaded. Existing
-populated `data/pairs/` is protected against overwrite; move it before rebuilding.
-Preparation reads ZIP members directly and streams parquet in 16-row batches.
-Additional dependency `pyarrow` is used to inspect the video parquet files.
+No GPU or dataset download is needed for inference. The checkout includes the
+approximately 24 MB `weights/fake_thermal.pt` fp16 state dict; the CPU model runs
+in fp32. See the separate **weights license** below before using it.
 
-## Inspected sources
+## CLI
 
-| Hugging Face dataset | Actual contents / resolution | Usability |
+```sh
+fake-thermal input.mov -o out.mp4 --palette ironbow
+fake-thermal input.mov -o comparison.mp4 --side-by-side --size 512 --smoothing .65 --raw
+fake-thermal photo.jpg -o thermal.png --palette arctic
+fake-thermal input.mov -o out.mp4 --weights weights/fake_thermal.pt
+```
+
+Palettes: **ironbow**, **white-hot**, **black-hot**, **rainbow**, **arctic**.
+Default working short side is 384; output returns to source resolution.
+Inference defaults to two CPU threads (`--threads 2`). EMA smoothing defaults
+to .65 previous-frame weight and resets on detected hard cuts; `--smoothing 0`
+disables it. `--raw` adds a grayscale `_raw.mp4` or `_raw.png` alongside output.
+
+ffmpeg decodes MOV/HEVC and rotation metadata, including 4K/60fps inputs. Output
+is H.264 MP4 at source average fps; audio is copied when MP4-compatible, with
+AAC fallback otherwise. Variable-frame-rate timestamps become constant-rate
+timing. Processing is not real-time: early measurements with training running
+were roughly 5 fps at default working size. Real iPhone HDR color handling has
+not been validated. See [media behavior and limitations](docs/INFERENCE.md).
+
+## Web UI
+
+```sh
+python app.py
+```
+
+Open **http://localhost:7860**, upload a video or image, choose palette,
+side-by-side view and smoothing, then click **Run** to preview and download.
+Optional grayscale exports are available too. The UI binds all interfaces;
+use it on a trusted local network. No public share tunnel is enabled.
+
+## Reproduce data and training
+
+Review upstream dataset terms first. Data are not bundled. Preparation downloads
+several large archives (including inspected-but-excluded sources); allow at
+least 15 GB for data and environment, with additional room for training outputs.
+
+```sh
+python -m pip install huggingface_hub pyarrow
+python scripts/prepare_data.py --download
+# Existing populated data/pairs is protected against overwrite.
+OMP_NUM_THREADS=6 MKL_NUM_THREADS=6 python scripts/train.py --benchmark
+OMP_NUM_THREADS=6 MKL_NUM_THREADS=6 python scripts/train.py
+python scripts/export_weights.py outputs/ckpt/best.pt
+```
+
+Training uses ImageNet-pretrained ResNet18 (downloaded by torchvision), paired
+geometric augmentation, per-image percentile-normalized targets, balanced
+LLVIP/KAIST/FLIR sampling, L1 + SSIM + gradient loss, and AdamW; no GAN.
+Training commands start a new run and overwrite training outputs: do not run
+them against an existing active run. Export only trusted local checkpoints.
+
+- [Training architecture, benchmark and validation](docs/TRAINING.md)
+- [Dataset preparation, counts, splits and alignment caveats](docs/DATA_REPORT.md)
+- [Inference, demos and performance](docs/INFERENCE.md)
+
+## Dataset credits
+
+| Dataset | Credits/source | Use and caveats |
 | --- | --- | --- |
-| `hieupth/llvip_384` | `images.zip`: 15,488 JPEGs, all 384×384, under `images/LLVIP/visible/{train,test}` (12,025/3,463). | **Zero usable pairs: the archive contains no infrared images.** The card's counts are visible-image counts, not paired files. Cannot check this mirror's cross-modal alignment. |
-| `jsonhash/FLIR_aligned` | `aligned.zip`: `align/{JPEGImages,Annotations,AnnotatedImages}`. Exactly 5,142 matching `_RGB.jpg` / `_PreviewData.jpeg` pairs in `JPEGImages`, all 640×512. Other folders contain annotations/masks and rendered annotations, not extra pairs. | Used. RGB has already been geometrically transformed to thermal dimensions. Random samples show good approximate registration of road markings, vehicles and buildings; some local parallax/edge mismatch remains. Not perfectly pixel-aligned ground truth. |
-| `AmineMarnissi/ThermalKaist` | Card describes 9,853 images (wording does not establish matched-pair count), `JPEGImages`, `Annotations`, `ImageSets`, Pascal VOC XML. `RGBKaist.zip` 3,023,506,314 bytes plus `thermalKaist.zip` 1,023,706,345 bytes: **4.05 GB combined**. | Not downloaded because both modalities exceed the ~3 GB budget. Card says original KAIST has aligned day/night pairs, but this modified mirror's matching, resolution and alignment were **not verified**. |
-| `Maxim37/flir_adas_video_pairs` | Four parquet shards, 1,588,194,544 bytes; 3,749 paired rows from eight RGB recordings. Embedded image structs plus filenames, sizes, COCO IDs and annotations. RGB 1224×1024 (2,151 rows) or 1024×768 (1,598); thermal always 640×512. | Downloaded and inspected, **excluded**: paired in time, not pixel-registered. Contact sheets show different fields of view, framing and object positions; simply resizing is insufficient. No speculative automatic warp applied. |
+| LLVIP | [Original LLVIP project](https://github.com/bupt-ai-cz/LLVIP); [jsonhash mirror](https://huggingface.co/datasets/jsonhash/LLVIP) | Paired low-light images; official train/test split; non-commercial terms. |
+| KAIST Multispectral Pedestrian | [KAIST benchmark](https://soonminhwang.github.io/rgbt-ped-detection/); [AmineMarnissi mirror](https://huggingface.co/datasets/AmineMarnissi/ThermalKaist) | Day/night sequences; sparse mirror subsampled by sequence; held-out whole sets. Mirror declares `other`, not a permissive grant. |
+| FLIR ADAS | [FLIR dataset and terms](https://www.flir.com/oem/adas/adas-dataset-form/); [jsonhash aligned mirror](https://huggingface.co/datasets/jsonhash/FLIR_aligned) | Approximately registered pairs with residual mismatch; inferred split does not certify scene-disjointness. |
 
-### Day and night
+Please cite the original dataset publications when using them and consult each
+upstream license. Public mirrors do not grant additional rights. No training
+images are redistributed in this repository.
 
-No machine-readable day/night labels were found in these inspected payloads/cards.
-LLVIP is explicitly low-light: all 12 sampled visible frames are night scenes.
-FLIR aligned contains both: its 12 random samples show 10 daylight / 2 night.
-FLIR video also contains day and night (4 daylight/twilight / 8 night in the
-12-frame random preview). These are **sample observations, not corpus-wide ratios**.
-KAIST's card claims both day/night; the mirror was not downloaded to verify it.
+## Code license
 
-### Licensing — do not treat public download as an open-source data license
+Source code is licensed under the [MIT License](LICENSE). **MIT applies to code,
+not the bundled weights or upstream datasets.** Third-party dependencies retain
+their own licenses.
 
-- LLVIP mirror README defers license/citation to the original dataset. The
-  [original LLVIP README](https://github.com/bupt-ai-cz/LLVIP) permits
-  **non-commercial** research, teaching, publication and personal experimentation,
-  subject to its linked license terms. It is not unrestricted commercial data.
-- FLIR aligned README metadata says `license: other` and points to the
-  [FLIR terms](https://www.flir.com/oem/adas/adas-dataset-form/), rather than
-  supplying an OSI/Creative Commons license. Full downstream/model redistribution
-  permissions have not been established.
-- ThermalKaist card says `license: other`; no explicit grant in its README.
-- FLIR video card supplies schema/statistics but **no license grant**. Original
-  FLIR terms may apply; this was not independently resolved.
+## Weights license
 
-Do not redistribute these data or assume commercial model rights. Code licensing
-has deliberately not been chosen on the owner's behalf.
+The bundled `weights/fake_thermal.pt` was trained on **LLVIP, KAIST and FLIR**,
+which carry research/non-commercial terms or other restrictions. **Weights are
+for non-commercial/research use only until retrained on permissively licensed
+data.** They are not MIT-licensed. Upstream terms still apply; this notice does
+not grant rights beyond those terms, and unrestricted redistribution or
+commercial use is not established. Verify upstream permissions for your use.
 
-## Prepared output and split limitations
+The included early checkpoint is iteration 2,000 (validation L1 0.191197), not
+the final training result. See [weights notice](weights/README.md).
 
-```
-data/pairs/{train,val}/rgb/flir_XXXXX.jpg
-data/pairs/{train,val}/thermal/flir_XXXXX.png
+## Tests
+
+```sh
+python -m unittest discover -s tests -v
+python -m unittest discover -s scripts -p 'test_*.py' -v
 ```
 
-Matching **stems** (JPEG RGB / PNG 8-bit grayscale thermal), both **360×288**,
-aspect ratio preserved, short side 288. 4,830 train + 260 validation = **5,090
-usable output pairs**; 52 additional FLIR pairs excluded as a split buffer.
-Validation is 5.11% of retained pairs.
-
-The archive provides frame IDs but no reliable scene/recording IDs. The script
-uses complete contiguous index runs (break at gaps >20) as **inferred sequence
-groups**, not random individual frames. The run closest to 5% is held out:
-FLIR IDs 06995–07567 (260 present frames). Any other group intersecting a
-150-index embargo around validation is excluded wholesale. The measured closest
-train/validation frame-index distance is 181. This prevents adjacent indexed
-frames straddling the split, but **does not certify a true scene-disjoint split**:
-revisits or the same physical scene in another run can remain. Ground-truth
-recording metadata/manual sequence curation is needed before publishing metrics.
-The sampled validation run is nighttime-only, so it is not a balanced day/night
-benchmark. Some pre-aligned RGB frames have black warp borders and visible
-residual mismatch; no border mask or extra registration is invented here.
-
-`data/manifest.json` records each FLIR pair and split/exclusion; `data/summary.json`
-records counts, resolutions and inferred groups. `data/prepare.log` holds the run
-output. The script fails on missing FLIR partners and mismatched dimensions.
-
-## Visual evidence and storage
-
-`data/preview.jpg`: 12 random FLIR aligned RGB|thermal pairs, 12 LLVIP visible
-images with explicitly marked missing thermal slots, and 12 excluded video pairs.
-Visually inspected: FLIR aligned approximately registers; video does not.
-`data/val_preview.jpg`: supplemental random validation pairs.
-No KAIST preview is possible without downloading its oversized paired payload.
-
-Local disk after preparation: **5.3 GiB project total**, including **4.0 GiB data**
-(3.6 GiB originals, 462 MiB prepared pairs) and **1.3 GiB venv**; rounded `du -sh`
-values. Data and venv are gitignored. There is no remote repository.
+Tests run without `data/`: preparation tests use synthetic images/keys, sampler
+tests use synthetic source lists, and CLI tests generate random model weights
+and a one-second video with audio. No pretrained encoder download is required
+by tests. GitHub Actions runs both suites with CPU Torch and ffmpeg on Python 3.10.

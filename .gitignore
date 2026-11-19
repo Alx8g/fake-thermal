@@ -4,4 +4,5 @@ outputs/
 __pycache__/
 *.pyc
 weights/*.pt
+!weights/fake_thermal.pt
 *.egg-info/

@@ -49,7 +49,8 @@ from trusted local training checkpoints. Inference loads those weights into an
 fp32 CPU model. The local export is approximately 24 MiB, from **iteration 2000**,
 validation L1 **0.191197**. Re-export after training to use improved weights.
 Checkpoint export uses pickle and must only read trusted checkpoints. Normal
-inference uses `weights_only=True`. Weights and media are not committed.
+inference uses `weights_only=True`. Early weights are bundled under the
+[non-commercial/research weights notice](../weights/README.md); media are not committed.
 
 ## Demos run while training continued
 
