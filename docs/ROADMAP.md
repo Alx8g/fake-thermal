@@ -90,6 +90,19 @@ bootstrapped from the v1 regression model as teacher; single forward pass at
 inference (CLI latency unchanged); sampling replaces averaging, so night
 ambiguity yields plausible samples rather than a smear.
 
+**Round-one result (honest):** a plain-CFM FlowUNet warmstarted from the v1
+teacher reached one-step validation L1 0.34 against the teacher's 0.17 after
+11.5k iterations at batch 4, with the validation curve flat after ~7k.
+Multi-step Euler sampling does not close the gap (1-step 0.343, 2-step 0.345,
+4-step 0.349, 8-step 0.352): integration granularity is not the bottleneck —
+the velocity field itself is underfit at this compute budget, consistent
+with MeanFlow's own finding that plain flow matching degrades under single-
+step sampling. Remaining paths: the MeanFlow JVP consistency term
+(arXiv:2505.13447), which is the actual mechanism behind working one-step
+sampling, with a longer schedule and the v2 regression model as warmstart
+teacher; or a shortcut-style teacher-to-data interpolation. Checkpoints and
+log: `outputs_flow/`.
+
 ## Phase 6 (research) — domain expansion
 
 Pseudo-pairs for out-of-domain scenes (nature, interiors) generated offline by
