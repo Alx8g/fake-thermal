@@ -19,7 +19,7 @@ was tested locally, the measured number is stated.
    fused heat-only-raises; training never sees it.
 6. **Temporal blindness.** Single-frame training plus EMA display smoothing.
 
-## Phase 1 — training-quality wins (implemented, ablation pending)
+## Phase 1 — training-quality wins (delivered)
 
 - **Focal Frequency Loss** (`--frequency-alpha`): adaptively weights
   hard-to-synthesize frequency components. Jiang et al., "Focal Frequency Loss
@@ -30,6 +30,10 @@ was tested locally, the measured number is stated.
 - Measured already: fp16 autocast on MPS gains only ~2.5% at this model size;
   channels-last stays ~23% slower than contiguous (see TRAINING.md). Defaults
   unchanged — benchmarks beat assumptions.
+- **Ablation (3k iterations, fp16, batch 16):** frequency loss −1.9% (best
+  arm, improves every source), weight EMA −1.0%, combined within noise of
+  EMA alone. Both are recommended defaults for future runs; numbers and
+  artifacts in TRAINING.md and `outputs/ablation/`.
 
 ## Phase 2 — occlusion-masked temporal filtering (delivered)
 
