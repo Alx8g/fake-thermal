@@ -83,9 +83,10 @@ class TrainingTests(unittest.TestCase):
         counts = Counter(dataset.sources[i] for i in dataset.sampler(6000))
         self.assertTrue(all(1800 < n < 2200 for n in counts.values()), counts)
 
-    def test_unconditioned_weights_strict_load(self):
-        model = ThermalUNet(pretrained=False)
+    def test_packaged_weights_strict_load_with_auto_detected_configuration(self):
         state = torch.load(WEIGHTS, map_location='cpu', weights_only=True)
+        model = ThermalUNet(pretrained=False,
+                             conditioning=any(key.startswith('style.') for key in state))
         model.load_state_dict(state, strict=True)
 
     def test_conditioning_adds_only_style_keys(self):

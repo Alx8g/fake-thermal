@@ -21,6 +21,7 @@ from torch import nn
 from fake_thermal.data import PairedDataset, normalize_thermal, validation_ids
 from fake_thermal.device import select_device
 from fake_thermal.infer import Predictor
+from fake_thermal.semantic import guided_upsample
 from fake_thermal.sensor import ThermalSensor
 
 
@@ -91,7 +92,8 @@ def main():
         rgb_tensor, target_tensor, name = dataset[i]
         rgb = (rgb_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
         real = normalize_thermal(target_tensor[0].numpy())
-        fake = cv2.resize(predictor(rgb), real.shape[::-1])
+        # the deployed pipeline: model, then RGB-guided edge transfer at full size
+        fake = guided_upsample(predictor(rgb), rgb)
         real_x += patches(real, args.patches, args.patch_size, rng)
         fake_x += patches(fake, args.patches, args.patch_size, rng)
         if (i + 1) % 20 == 0:

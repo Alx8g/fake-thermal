@@ -25,7 +25,8 @@ from fake_thermal.model import ThermalUNet
 
 PRECISIONS = ('fp32', 'fp16')
 LAYOUTS = ('auto', 'contiguous', 'channels_last')
-RESUME_DEFAULTS = {'precision': 'fp32', 'layout': 'auto', 'frequency_alpha': 0., 'ema_decay': 0., 'conditioning': False}
+RESUME_DEFAULTS = {'precision': 'fp32', 'layout': 'auto', 'frequency_alpha': 0.,
+                   'ema_decay': 0., 'conditioning': False, 'lpips_alpha': 0.}
 
 
 def forward(model, rgb, fp16=False):
@@ -76,7 +77,7 @@ def load_scheduler(scheduler, stored, iterations):
 
 def resume_mismatches(stored, current):
     keys = ('batch_size', 'crop', 'seed', 'precision', 'layout', 'frequency_alpha', 'ema_decay',
-            'conditioning')
+            'conditioning', 'lpips_alpha')
     stored = {**RESUME_DEFAULTS, **stored}
     current = {**RESUME_DEFAULTS, **current}
     return [f'{key}: {stored.get(key)!r} != {current.get(key)!r}'
@@ -99,13 +100,26 @@ def optimizer_for(model):
                               {'params': decoder, 'lr': 3e-4}], weight_decay=.01)
 
 
-def step(model, optimizer, rgb, target, fp16=False, layout='auto', frequency_alpha=0.):
+def perceptual_metric(device):
+    """LPIPS(AlexNet) as a training loss term (Johnson et al. pattern)."""
+    try:
+        import lpips
+    except ImportError:
+        raise SystemExit('--lpips-alpha needs the optional lpips package: uv pip install lpips')
+    return lpips.LPIPS(net='alex').to(device).eval()
+
+
+def step(model, optimizer, rgb, target, fp16=False, layout='auto', frequency_alpha=0.,
+         metric=None, lpips_alpha=0.):
     device = next(model.parameters()).device
     rgb = rgb.to(device=device, dtype=torch.float32, memory_format=memory_format(device, layout))
     target = target.to(device=device, dtype=torch.float32)
     optimizer.zero_grad(set_to_none=True)
     pred = forward(model, rgb, fp16)
     loss = thermal_loss(pred, target, frequency_alpha)
+    if metric is not None:
+        triplet = lambda frame: frame.repeat(1, 3, 1, 1) * 2 - 1
+        loss = loss + lpips_alpha * metric(triplet(pred), triplet(target)).mean()
     if not torch.isfinite(loss):
         raise RuntimeError(f'Non-finite loss: {loss.item()}')
     loss.backward()
@@ -154,6 +168,7 @@ def validate(model, batches, grid_path=None, fp16=False, layout='auto'):
 def benchmark(args, train, val):
     results = []
     fp16 = args.precision == 'fp16'
+    metric = perceptual_metric(args.device) if args.lpips_alpha else None
     candidates = (args.batch_size,) if args.batch_size else (2, 4)
     steps = 50 // len(candidates)
     for batch in candidates:
@@ -168,7 +183,8 @@ def benchmark(args, train, val):
             synchronize(args.device)
             start = time.perf_counter()
             rgb, target, _ = next(batches)
-            loss = step(model, optimizer, rgb, target, fp16, args.layout, args.frequency_alpha)
+            loss = step(model, optimizer, rgb, target, fp16, args.layout, args.frequency_alpha,
+                         metric, args.lpips_alpha)
             synchronize(args.device)
             timings.append(time.perf_counter() - start)
             print(f'benchmark batch={batch} iter={i+1}/{steps} loss={loss:.5f} seconds={timings[-1]:.3f}', flush=True)
@@ -211,9 +227,11 @@ def training_config(args):
 
 def train_run(args, train, val, ids):
     config = training_config(args)
-    config.update(seed=args.seed, frequency_alpha=args.frequency_alpha, ema_decay=args.ema_decay)
+    config.update(seed=args.seed, frequency_alpha=args.frequency_alpha,
+                 ema_decay=args.ema_decay, lpips_alpha=args.lpips_alpha)
     batch, iterations = config['batch_size'], config['iterations']
     fp16 = args.precision == 'fp16'
+    metric = perceptual_metric(args.device) if args.lpips_alpha else None
     model = ThermalUNet(conditioning=args.conditioning).to(device=args.device, dtype=torch.float32,
                                                              memory_format=memory_format(args.device, args.layout))
     optimizer = optimizer_for(model)
@@ -263,7 +281,8 @@ def train_run(args, train, val, ids):
     model.train()
     for offset, (rgb, target, _) in enumerate(batches):
         iteration = start + offset
-        loss = step(model, optimizer, rgb, target, fp16, args.layout, args.frequency_alpha)
+        loss = step(model, optimizer, rgb, target, fp16, args.layout, args.frequency_alpha,
+                    metric, args.lpips_alpha)
         scheduler.step()
         if ema is not None:
             ema.update(model)
@@ -326,6 +345,9 @@ def build_parser():
                         help='focal frequency loss exponent; 0 disables (default), 1.0 recommended')
     parser.add_argument('--ema-decay', type=float, default=0.,
                         help='weight EMA decay used for checkpointing; 0 disables (default), 0.999 recommended')
+    parser.add_argument('--lpips-alpha', type=float, default=0.,
+                        help='LPIPS perceptual loss weight; 0 disables (default). Counteracts the '
+                             'regression-to-mean blur that L1 rewards; needs the lpips package')
     parser.add_argument('--conditioning', action='store_true',
                         help='FiLM style conditioning from input luminance statistics (default off)')
     parser.add_argument('--batch-size', type=positive_int)
@@ -349,6 +371,8 @@ if __name__ == '__main__':
         parser.error('--frequency-alpha must be nonnegative')
     if not 0 <= args.ema_decay < 1:
         parser.error('--ema-decay must be in [0, 1)')
+    if args.lpips_alpha < 0:
+        parser.error('--lpips-alpha must be nonnegative')
     torch.set_num_threads(args.threads)
     torch.set_num_interop_threads(1)
     torch.manual_seed(args.seed)
