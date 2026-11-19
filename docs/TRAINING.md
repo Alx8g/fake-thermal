@@ -223,6 +223,26 @@ frames lack. Conditioned runs are recommended for day-domain accuracy;
 unconditioned remains reasonable where night performance dominates.
 Artifacts: `outputs/cond/`.
 
+### Full-length recipe comparison (v2, 30k iterations)
+
+The v2 run stacked every validated ingredient — focal frequency loss, weight
+EMA, style conditioning and the 3,193 rescued video pairs — on the same
+256-crop/288px protocol as the shipped incumbent:
+
+| Model | Validation L1 | LPIPS (AlexNet) |
+| --- | ---: | ---: |
+| incumbent (plain L1+SSIM+gradient) | **0.169593** | **0.6535** |
+| v2 (FFL + EMA + conditioning + video) | 0.171092 | 0.6688 |
+
+The short-run ablation gains did not stack at full length: EMA checkpointing
+lags late-run improvements, conditioning trades KAIST accuracy for FLIR/LLVIP,
+and the daytime-heavy video pairs shift the source balance. **The incumbent
+remains the packaged model at this scale.** The decisive next lever is
+resolution: v3 trains on 512px-native data (including the video pairs
+re-registered at native 640x512 thermal) at crop 448, evaluated at its
+deployment resolution via the realism benchmark (scripts/evaluate_realism.py).
+Artifacts: `outputs/eval_v2.json`, `outputs/v2/`.
+
 ### FLIR video pair rescue (Phase 3 full pass)
 
 3,405 of the 3,747 excluded unaligned video frames (90.8%) registered
