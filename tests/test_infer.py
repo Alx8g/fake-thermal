@@ -86,8 +86,14 @@ class CLIIntegrationTests(unittest.TestCase):
 
     def test_rotation(self):
         rotated = self.root / 'rotated.mov'
-        subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(self.source), '-c', 'copy',
-                        '-metadata:s:v:0', 'rotate=90', str(rotated)], check=True)
+        help_text = subprocess.check_output(['ffmpeg', '-h', 'full'], stderr=subprocess.DEVNULL,
+                                            text=True)
+        if '-display_rotation' in help_text:
+            args = ['-display_rotation:v:0', '90', '-i', str(self.source), '-c', 'copy']
+        else:
+            args = ['-i', str(self.source), '-c', 'copy', '-metadata:s:v:0', 'rotate=90']
+        subprocess.run(['ffmpeg', '-v', 'error', '-y', *args, str(rotated)], check=True)
+        self.assertEqual(probe(rotated)[:2], (64, 96), 'Fixture must contain rotation metadata')
         output = self.root / 'upright.mp4'
         result = self.cli(rotated, output)
         self.assertEqual(result.returncode, 0, result.stderr)
