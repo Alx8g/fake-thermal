@@ -10,7 +10,9 @@ the CLI and web UI only.
 recover real thermal information from phone RGB sensors. Colors are relative
 predicted intensity, not Celsius/Fahrenheit. Predictions may be wrong: do not
 use them for medical, safety, surveillance decisions, or temperature measurement.
-The bundled weights are an early checkpoint and outputs can be blurry/coarse.
+The bundled weights are the best checkpoint of a 30,000-iteration run
+(validation L1 0.1696, a third below the semantic-prior-only baseline);
+outputs are plausible thermal appearance, not thermometry.
 
 ## Demo
 
@@ -134,6 +136,7 @@ them against an existing active run. Export only trusted local checkpoints.
 - [Training architecture, benchmark and validation](docs/TRAINING.md)
 - [Dataset preparation, counts, splits and alignment caveats](docs/DATA_REPORT.md)
 - [Inference, demos and performance](docs/INFERENCE.md)
+- [Research roadmap: temporal filtering, video data rescue, one-step generation](docs/ROADMAP.md)
 
 ## Dataset credits
 
@@ -162,8 +165,9 @@ data.** They are not MIT-licensed. Upstream terms still apply; this notice does
 not grant rights beyond those terms, and unrestricted redistribution or
 commercial use is not established. Verify upstream permissions for your use.
 
-The included early checkpoint is iteration 3,500 (validation L1 0.184265), not
-the final training result. See [weights notice](fake_thermal/weights/README.md).
+The bundled weights are the best checkpoint (iteration 17,500 of a 30,000-iteration
+M1 Pro MPS run, validation L1 0.169593, ~8% below the previous CPU-run export
+at iteration 3,500). See [weights notice](fake_thermal/weights/README.md).
 
 ## Tests
 

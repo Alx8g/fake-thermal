@@ -156,6 +156,13 @@ These measurements include loading weights and final encoding; KAIST also
 encodes a second grayscale video. Six-thread training was running concurrently.
 Loop-only rates were 5.07 and 6.12 fps respectively. This is not real-time 60fps.
 
+The same KAIST demo on Apple M1 Pro (MPS, PyTorch 2.15, default quality,
+x264 crf 18) with the shipped checkpoint: **12.3 fps** with the semantic prior
+and **21.3 fps** with `--no-semantic`. The DeepLabV3 prior costs roughly 45%
+of end-to-end throughput; lowering `--size`, using a faster x264 preset, or
+disabling the prior are the dials for near-real-time preview. Real-time
+filters remain a roadmap goal (see [ROADMAP](ROADMAP.md)).
+
 KAIST uses held-out **set06_V003** with pedestrians, 200 available RGB frames
 rendered at 20fps into a ten-second clip. **The mirror is sparse**: this is a
 time-compressed montage of sequential available frames, not native consecutive
