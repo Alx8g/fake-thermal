@@ -55,9 +55,12 @@ fake-thermal input.mov -o fixed-display.mp4 --device cpu --no-auto-contrast
 
 Palettes: **ironbow**, **white-hot**, **black-hot**, **rainbow**, **arctic**.
 Default working short side is 384; output returns to source resolution.
-Inference defaults to two CPU threads (`--threads 2`). EMA smoothing defaults
-to .65 previous-frame weight and resets on detected hard cuts; `--smoothing 0`
-disables it. `--raw` adds a grayscale `_raw.mp4` or `_raw.png` alongside output.
+Inference defaults to two CPU threads (`--threads 2`). Temporal smoothing
+defaults to motion-compensated propagation: the previous heat map is carried
+along estimated motion with occlusion masking (Bonneel et al., 2015 pattern),
+falls back to plain previous-frame weighting on static shots (`--no-flow-smoothing`)
+and resets on detected hard cuts; `--smoothing 0` disables it entirely.
+`--raw` adds a grayscale `_raw.mp4` or `_raw.png` alongside output.
 
 **Semantic heat priors are on by default** (`--semantic`, strength .7). A
 pretrained torchvision DeepLabV3 MobileNetV3 model runs at 320px short side,

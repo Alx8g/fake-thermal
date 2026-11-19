@@ -37,23 +37,73 @@ def apply_palette(heat, palette):
 
 
 class TemporalSmoother:
-    def __init__(self, smoothing=.65, cut_threshold=.22):
+    def __init__(self, smoothing=.65, cut_threshold=.22, flow=True, tolerance=1.5):
         if not 0 <= smoothing < 1:
             raise ValueError('Smoothing must be in [0, 1)')
         self.smoothing, self.threshold = smoothing, cut_threshold
-        self.previous, self.scene = None, None
+        self.flow, self.tolerance = flow, tolerance
+        self.previous, self.scene, self.scene_gray = None, None, None
         self.reset_history = True
 
     def update(self, heat, rgb):
         scene = cv2.resize(rgb, (64, 64), interpolation=cv2.INTER_AREA).astype(np.float32) / 255
         cut = self.scene is not None and np.abs(scene - self.scene).mean() > self.threshold
         self.reset_history = self.previous is None or cut or self.previous.shape != heat.shape
+        current = None
+        if self.flow:
+            small = cv2.resize(rgb, flow_grid(heat.shape), interpolation=cv2.INTER_AREA)
+            current = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
         if self.reset_history:
             result = heat.copy()
-        else:
+        elif not self.flow:
             result = self.smoothing * self.previous + (1 - self.smoothing) * heat
+        else:
+            result = self.propagate(heat, current, self.scene_gray)
         self.previous, self.scene = result, scene
+        self.scene_gray = current
         return result
+
+    def propagate(self, heat, current, previous):
+        """Blend the previous heat map carried along the estimated motion field."""
+        h, w = heat.shape
+        back = optical_flow(current, previous)
+        magnitude = np.hypot(back[..., 0], back[..., 1])
+        if float(magnitude.max()) < .5:
+            mask = np.ones_like(magnitude, np.float32)
+        else:
+            fore = optical_flow(previous, current)
+            mask = consistent_mask(back, fore, self.tolerance)
+        gx, gy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+        scale = np.float32([w / back.shape[1], h / back.shape[0]])
+        back_full = cv2.resize(back, (w, h), interpolation=cv2.INTER_LINEAR) * scale
+        x = gx + back_full[..., 0]
+        y = gy + back_full[..., 1]
+        inside = ((x >= 0) & (x <= w - 1) & (y >= 0) & (y <= h - 1)).astype(np.float32)
+        warped = cv2.remap(self.previous, x, y, interpolation=cv2.INTER_LINEAR,
+                           borderMode=cv2.BORDER_REPLICATE)
+        alpha = self.smoothing * (cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR) * inside)
+        return alpha * warped + (1 - alpha) * heat
+
+
+def flow_grid(shape):
+    """Quarter-resolution (width, height) used for motion estimation."""
+    h, w = shape
+    return max(w // 4, 32), max(h // 4, 32)
+
+
+def optical_flow(source, target):
+    """Farneback displacement field taking pixels of `source` to `target`."""
+    return cv2.calcOpticalFlowFarneback(source, target, None, .5, 3, 21, 3, 5, 1.2, 0)
+
+
+def consistent_mask(back, fore, tolerance=1.5):
+    """Forward-backward consistency: reliable where the round trip is short."""
+    h, w = back.shape[:2]
+    gx, gy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    x = np.clip((gx + back[..., 0]).round().astype(int), 0, w - 1)
+    y = np.clip((gy + back[..., 1]).round().astype(int), 0, h - 1)
+    trip = np.hypot(back[..., 0] + fore[y, x, 0], back[..., 1] + fore[y, x, 1])
+    return (trip <= tolerance).astype(np.float32)
 
 
 class DisplayNormalizer:
@@ -128,8 +178,9 @@ class Predictor:
         cv2.setNumThreads(1)
         self.size = size
         self.device = select_device(device)
-        self.model = ThermalUNet(pretrained=False).eval()
         state = torch.load(weights, map_location='cpu', weights_only=True)
+        self.model = ThermalUNet(pretrained=False,
+                                 conditioning=any(key.startswith('style.') for key in state)).eval()
         self.model.load_state_dict(state, strict=True)
         self.model.to(device=self.device, dtype=torch.float32, memory_format=memory_format(self.device))
 
@@ -163,7 +214,8 @@ def mux_audio(video, original, output):
 
 def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=False,
             weights=DEFAULT_WEIGHTS, smoothing=.65, raw=False, threads=2,
-            semantic=True, semantic_strength=.7, device='auto', auto_contrast=True):
+            semantic=True, semantic_strength=.7, device='auto', auto_contrast=True,
+            flow=True):
     start = time.perf_counter()
     source, output = Path(input_path), Path(output_path)
     if source.resolve() == output.resolve():
@@ -174,7 +226,7 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
         raise ValueError(f'Unknown palette: {palette}')
     if not np.isfinite(semantic_strength) or not 0 <= semantic_strength <= 1:
         raise ValueError('Semantic strength must be between 0 and 1')
-    smoother = TemporalSmoother(smoothing)
+    smoother = TemporalSmoother(smoothing, flow=flow)
     selected_device = select_device(device)
     predictor = Predictor(weights, size, threads, selected_device.type)
     semantic_predictor = SemanticPrior(device=selected_device.type) if semantic and semantic_strength > 0 else None
@@ -290,11 +342,14 @@ def main():
     parser.add_argument('--device', choices=DEVICES, default='auto', help='auto selects CUDA, then MPS, then CPU')
     parser.add_argument('--auto-contrast', action=argparse.BooleanOptionalAction, default=True,
                         help='temporally stable percentile display contrast (default on; raw is unaffected)')
+    parser.add_argument('--flow-smoothing', action=argparse.BooleanOptionalAction, default=True,
+                        help='carry the previous heat map along estimated motion with occlusion masking (default on)')
     args = parser.parse_args()
     try:
         convert(args.input, args.output, args.palette, args.size, args.side_by_side,
                 args.weights, args.smoothing, args.raw, args.threads,
-                args.semantic, args.semantic_strength, args.device, args.auto_contrast)
+                args.semantic, args.semantic_strength, args.device, args.auto_contrast,
+                args.flow_smoothing)
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
         parser.exit(1, f'fake-thermal: {error}\n')
 

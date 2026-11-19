@@ -126,7 +126,7 @@ class DeviceTests(unittest.TestCase):
             args.device = select_device('cpu')
 
             class TinyModel(torch.nn.Module):
-                def __init__(self):
+                def __init__(self, **_):
                     super().__init__()
                     self.encoder = torch.nn.Conv2d(3, 4, 3, padding=1)
                     self.head = torch.nn.Conv2d(4, 1, 1)
