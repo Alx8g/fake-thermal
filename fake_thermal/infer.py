@@ -18,6 +18,7 @@ from fake_thermal.device import DEVICES, memory_format, select_device
 from fake_thermal.semantic import SemanticPrior, fuse_heat, guided_upsample
 
 DEFAULT_WEIGHTS = Path(__file__).resolve().parent / 'weights/fake_thermal.pt'
+UNREADABLE_MEDIA = "Couldn't read this file as a video or image — try an MP4/MOV/JPG/PNG."
 PALETTES = {
     'white-hot': [(0, 0, 0), (255, 255, 255)],
     'black-hot': [(255, 255, 255), (0, 0, 0)],
@@ -77,13 +78,18 @@ class DisplayNormalizer:
 
 
 def probe(path):
-    result = subprocess.run(['ffprobe', '-v', 'error', '-show_streams', '-show_format',
-                             '-of', 'json', str(path)], capture_output=True, text=True, check=True)
+    try:
+        result = subprocess.run(['ffprobe', '-v', 'error', '-show_streams', '-show_format',
+                                 '-of', 'json', str(path)], capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError:
+        raise ValueError(UNREADABLE_MEDIA) from None
     info = json.loads(result.stdout)
     stream = next((s for s in info['streams'] if s['codec_type'] == 'video'), None)
     if stream is None:
-        raise ValueError('Input has no video stream')
-    w, h = stream['width'], stream['height']
+        raise ValueError(UNREADABLE_MEDIA)
+    w, h = stream.get('width', 0) or 0, stream.get('height', 0) or 0
+    if w <= 0 or h <= 0:
+        raise ValueError(UNREADABLE_MEDIA)
     rotation = float(stream.get('tags', {}).get('rotate', 0))
     for side in stream.get('side_data_list', []):
         rotation = float(side.get('rotation', rotation))
@@ -187,11 +193,11 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
             Image.fromarray(np.rint(heat * 255).astype(np.uint8)).save(raw_path)
         frames = 1
     else:
+        w, h, fps, total = probe(source)
         if output.suffix.lower() != '.mp4':
             raise ValueError('Video output must be .mp4')
         if raw_path is not None and source.resolve() == raw_path.resolve():
             raise ValueError('Input and raw output must be different files')
-        w, h, fps, total = probe(source)
         frames = 0
         with tempfile.TemporaryDirectory(prefix='fake-thermal-', dir=output.parent) as temporary:
             temp = Path(temporary)
@@ -209,7 +215,7 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
                             if not buffer:
                                 break
                             if len(buffer) != w * h * 3:
-                                raise RuntimeError('Truncated decoded frame')
+                                raise ValueError(UNREADABLE_MEDIA)
                             rgb = np.frombuffer(buffer, dtype=np.uint8).reshape(h, w, 3)
                             heat = smoother.update(predict_heat(rgb), rgb)
                             heat = guided_upsample(heat, rgb)
@@ -222,7 +228,9 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
                             frames += 1
                             bar.update()
                     if decoder.wait() != 0:
-                        raise RuntimeError('ffmpeg decode failed: ' + (temp / 'decode.log').read_text()[-2000:])
+                        raise ValueError(UNREADABLE_MEDIA)
+                    if frames == 0:
+                        raise ValueError(UNREADABLE_MEDIA)
                     enc.stdin.close()
                     if enc.wait() != 0:
                         raise RuntimeError('ffmpeg encoding failed')
@@ -230,8 +238,6 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
                         raw_enc.stdin.close()
                         if raw_enc.wait() != 0:
                             raise RuntimeError('Raw video encoding failed')
-                    if frames == 0:
-                        raise ValueError('No frames decoded')
                     mux_audio(temp / 'color.mp4', source, output)
                     if raw:
                         mux_audio(temp / 'raw.mp4', source, raw_path)

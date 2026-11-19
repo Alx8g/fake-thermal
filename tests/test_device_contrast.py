@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 from PIL import Image
@@ -12,7 +12,7 @@ import torch
 
 from fake_thermal.data import PairedDataset
 from fake_thermal.device import memory_format, select_device
-from fake_thermal.infer import DisplayNormalizer, Predictor, TemporalSmoother, apply_palette, convert
+from fake_thermal.infer import DisplayNormalizer, Predictor, TemporalSmoother, UNREADABLE_MEDIA, apply_palette, convert
 from scripts.train import build_parser, training_config, train_run, validate
 
 
@@ -75,6 +75,33 @@ class DeviceTests(unittest.TestCase):
                 with self.subTest(flag=flag), contextlib.redirect_stderr(io.StringIO()):
                     with self.assertRaises(SystemExit):
                         build_parser().parse_args([flag, '0'])
+
+    def test_unreadable_upload_has_friendly_ui_error(self):
+        import app
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'x.mp4'
+            source.write_text('not media')
+            with patch('app.ROOT', Path(directory)), patch('fake_thermal.infer.Predictor'):
+                with self.assertRaises(app.gr.Error) as caught:
+                    app.run_media(str(source), 'ironbow', False, .65, False, False, .7, 'cpu', True)
+            self.assertEqual(caught.exception.message, UNREADABLE_MEDIA)
+            self.assertNotIn(str(source), str(caught.exception))
+
+    def test_unreadable_decode_or_empty_video_has_friendly_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'broken.mp4'
+            source.write_text('not media')
+            for code in (0, 1):
+                with self.subTest(decoder_exit_code=code):
+                    decoder, encoder = MagicMock(), MagicMock()
+                    decoder.stdout.read.return_value = b''
+                    decoder.wait.return_value = code
+                    decoder.poll.return_value = encoder.poll.return_value = 0
+                    with patch('fake_thermal.infer.Predictor'), patch('fake_thermal.infer.probe', return_value=(64, 64, '6/1', 0)), patch('fake_thermal.infer.subprocess.Popen', side_effect=[decoder, encoder]):
+                        with self.assertRaises(ValueError) as caught:
+                            convert(source, Path(directory) / 'out.mp4', semantic=False, device='cpu')
+                    self.assertEqual(str(caught.exception), UNREADABLE_MEDIA)
 
     def test_cpu_training_crop_validation_and_checkpoint(self):
         torch.set_num_threads(2)

@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image
 import torch
 
-from fake_thermal.infer import apply_palette, PALETTES, TemporalSmoother, probe, Predictor
+from fake_thermal.infer import apply_palette, PALETTES, TemporalSmoother, probe, Predictor, UNREADABLE_MEDIA
 from fake_thermal.model import ThermalUNet
 
 
@@ -123,6 +123,18 @@ class CLIIntegrationTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('Input and raw output must be different files', result.stderr)
                 self.assertEqual(source.read_bytes(), original)
+                self.assertFalse(output.exists())
+
+    def test_unreadable_media_has_friendly_cli_error(self):
+        for suffix in ('.mp4', '.jpg'):
+            with self.subTest(suffix=suffix):
+                source = self.root / ('unreadable' + suffix)
+                source.write_text('not media')
+                output = self.root / ('unreadable_result' + ('.mp4' if suffix == '.mp4' else '.png'))
+                result = self.cli(source, output)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.stderr.strip(), 'fake-thermal: ' + UNREADABLE_MEDIA)
+                self.assertEqual(result.stdout, '')
                 self.assertFalse(output.exists())
 
 
