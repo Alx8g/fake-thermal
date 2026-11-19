@@ -24,7 +24,9 @@ all local network interfaces; use only on a trusted machine/network.
 - CPU inference defaults to **two Torch threads**, OpenCV one thread and one
   thread per ffmpeg codec/filter pipeline. Training is not stopped or altered.
 - Working short side defaults to **384**. The model pads to multiples of 32 and
-  unpads internally; heat maps are bilinearly upsampled to upright source size.
+  unpads internally; heat maps use a fast guided filter with RGB luminance as
+  guide (box-filtered linear coefficients at working resolution, reconstructed
+  at upright source size). This follows visible edges, not true thermal edges.
 - ffmpeg handles MOV/HEVC decode and rotation metadata. Image EXIF orientation
   is applied. Output is H.264/yuv420p MP4 at the source average frame rate;
   variable-rate timestamps become constant average-rate timing, not an exact
@@ -36,6 +38,23 @@ all local network interfaces; use only on a trusted machine/network.
   zero disables smoothing. Mean pixel change on a reduced RGB frame detects
   hard cuts and resets history. This is a heuristic, not optical-flow tracking;
   fast motion can trail and similar-looking cuts can evade detection.
+- Semantic priors default on at strength .7. `--no-semantic` disables semantic
+  and emissive priors; `--semantic-strength 0` also bypasses segmentation.
+  DeepLabV3 MobileNetV3 runs at 320px short side, using the pretrained
+  COCO-with-VOC-labels weights from torchvision, cached on first use in Torch's
+  model cache (`TORCH_HOME` can relocate it). Network failures are reported,
+  not silently treated as successful semantic inference; disable semantic mode
+  to work offline before weights have been cached.
+- Soft person probabilities target .9; bird/cat/dog/horse/sheep/cow target .85;
+  car/bus/motorbike/train target .6. Other classes add no semantic confidence.
+  Saturated bright orange/yellow suggests intensity 1; very bright near-white
+  suggests .8, with Gaussian feathering. The semantic and emissive targets are
+  confidence-weighted together, with maximum confidence used for fusion:
+  `model + strength * confidence * max(prior - model, 0)`. Fusion precedes EMA.
+  This is a typical-appearance assumption, not a thermal detector. Orange
+  objects and white surfaces can falsely heat up; a cold person or vehicle can
+  also be incorrectly heated. The original training validation L1 does not
+  measure or validate this inference-only prior.
 - `--raw` writes `_raw.mp4` alongside videos, or lossless grayscale `_raw.png`
   alongside images. Raw video is grayscale H.264, so it is display-intensity
   data with codec loss, not scientific floating-point measurements.
@@ -46,13 +65,47 @@ all local network interfaces; use only on a trusted machine/network.
 
 Default weights are `fake_thermal/weights/fake_thermal.pt`, an fp16 **state dict** exported
 from trusted local training checkpoints. Inference loads those weights into an
-fp32 CPU model. The local export is approximately 24 MiB, from **iteration 2000**,
-validation L1 **0.191197**. Re-export after training to use improved weights.
+fp32 CPU model. The local export is approximately 24 MiB, from **iteration 3500**,
+validation L1 **0.184265**. Re-export after training to use improved weights.
 Checkpoint export uses pickle and must only read trusted checkpoints. Normal
 inference uses `weights_only=True`. Early weights are bundled under the
 [non-commercial/research weights notice](../fake_thermal/weights/README.md); media are not committed.
 
-## Demos run while training continued
+## Semantic-prior demos (iteration 3500 weights)
+
+Both demos were regenerated with ironbow, side-by-side, guided upsampling,
+default model size 384, default semantic size 320 and strength .7. The same
+inputs were processed with `--no-semantic` for comparison. Two Torch threads
+were used; the original training process remained running. Cached semantic
+weights avoided including network download time. Timings are end-to-end on a
+shared CPU, including model loading and video muxing, not isolated model speed.
+
+| Input | Semantic on | Semantic off |
+| --- | ---: | ---: |
+| KAIST, 200 frames | 61.59 s / **3.25 fps** | 38.28 s / **5.22 fps** |
+| Commons, 115 frames | 28.74 s / **4.00 fps** | 18.63 s / **6.17 fps** |
+
+```sh
+python scripts/export_weights.py outputs/ckpt/best.pt
+fake-thermal outputs/demo/kaist_day_input.mp4 -o outputs/demo/kaist_day_thermal.mp4 --side-by-side --palette ironbow --semantic
+fake-thermal outputs/demo/commons_input.mp4 -o outputs/demo/commons_thermal.mp4 --side-by-side --palette ironbow --semantic
+fake-thermal outputs/demo/kaist_day_input.mp4 -o outputs/demo/kaist_day_model_only.mp4 --side-by-side --palette ironbow --no-semantic
+fake-thermal outputs/demo/commons_input.mp4 -o outputs/demo/commons_model_only.mp4 --side-by-side --palette ironbow --no-semantic
+```
+
+Semantic-on sample frames: `outputs/demo/kaist_semantic_frame_{1,5,9}.jpg`
+and `outputs/demo/commons_semantic_frame_{1,2,4}.jpg`. Model-only comparison
+frames: `kaist_model_only_frame_5.jpg` and `commons_model_only_frame_2.jpg`
+in the same directory. Detailed timings are in `{kaist,commons}_semantic_{on,off}.log`.
+
+Inspected samples show substantially hotter, more recognizable close-up people
+in the Commons clip versus model-only output. Distant KAIST pedestrians remain
+faint: the small segmentation model misses small people, and guided filtering
+cannot invent missing detections. Real flame footage was not available in these
+demos; emissive behavior is tested on synthetic color patches. New Gradio
+controls are wired to conversion but have not been visually reverified.
+
+## Original demos run while training continued (historical iteration 2000)
 
 Commands:
 
@@ -99,7 +152,10 @@ improve detail; neither these demos nor the final model measure temperature.
 
 ## Checks
 
-`python -m unittest discover -s tests -v`: 10 tests passed, including palette
+`python -m unittest discover -s tests -v`: 18 tests passed, including semantic
+soft probability mapping, never-cooling/zero-strength fusion, synthetic flame
+and bright-white/negative-color patches, guided edge/shape/empty handling,
+mocked lazy segmentation and semantic controls without network access, palette
 endpoints/clipping, EMA and scene-cut reset, one-second video CLI conversion,
 AAC preservation, exact frame count/fps, raw export, MOV rotation, single-image
 conversion, invalid inputs, existing shape and training-loss tests.
@@ -108,7 +164,7 @@ A separate synthetic **3840×2160 HEVC MOV at 60fps** converted successfully:
 `outputs/demo/hevc4k60_thermal.mp4`, same resolution, 60/1 fps, all three frames.
 It is a short decode/encode smoke test, not genuine iPhone/HDR footage. Real
 iPhone HEVC/HDR footage was not available to visually validate color handling.
-No HDR-specific tone mapping or edge-guided superresolution is implemented.
+No HDR-specific tone mapping or learned superresolution is implemented.
 
 The system ffmpeg predates `-fps_mode`; the decoder uses the equivalent
 `-vsync 0`. Failure cleanup has bounded process waits to avoid hanging encoders.

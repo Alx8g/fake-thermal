@@ -1,7 +1,7 @@
 # Bundled weights — not MIT licensed
 
-`fake_thermal.pt` is an approximately 24 MB fp16 state dict from iteration 2,000
-of the ResNet18 U-Net run (validation L1 0.191197). This is an early checkpoint,
+`fake_thermal.pt` is an approximately 24 MB fp16 state dict from iteration 3,500
+of the ResNet18 U-Net run (validation L1 0.184265). This is an early checkpoint,
 not a calibrated temperature model or the final training result.
 
 Training sources: LLVIP, KAIST Multispectral Pedestrian, and FLIR ADAS aligned

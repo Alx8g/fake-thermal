@@ -14,6 +14,7 @@ import torch
 from tqdm import tqdm
 
 from fake_thermal.model import ThermalUNet
+from fake_thermal.semantic import SemanticPrior, fuse_heat, guided_upsample
 
 DEFAULT_WEIGHTS = Path(__file__).resolve().parent / 'weights/fake_thermal.pt'
 PALETTES = {
@@ -114,7 +115,8 @@ def mux_audio(video, original, output):
 
 
 def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=False,
-            weights=DEFAULT_WEIGHTS, smoothing=.65, raw=False, threads=2):
+            weights=DEFAULT_WEIGHTS, smoothing=.65, raw=False, threads=2,
+            semantic=True, semantic_strength=.7):
     start = time.perf_counter()
     source, output = Path(input_path), Path(output_path)
     if source.resolve() == output.resolve():
@@ -123,8 +125,19 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
         raise FileNotFoundError(source)
     if palette not in PALETTES:
         raise ValueError(f'Unknown palette: {palette}')
+    if not np.isfinite(semantic_strength) or not 0 <= semantic_strength <= 1:
+        raise ValueError('Semantic strength must be between 0 and 1')
     smoother = TemporalSmoother(smoothing)
     predictor = Predictor(weights, size, threads)
+    semantic_predictor = SemanticPrior() if semantic and semantic_strength > 0 else None
+
+    def predict_heat(rgb):
+        heat = predictor(rgb)
+        if semantic_predictor is not None:
+            prior, confidence = semantic_predictor(rgb, heat.shape)
+            heat = fuse_heat(heat, prior, confidence, semantic_strength)
+        return heat
+
     output.parent.mkdir(parents=True, exist_ok=True)
     raw_path = output.with_name(output.stem + '_raw' + output.suffix) if raw else None
     try:
@@ -138,7 +151,7 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
         raw_path = output.with_name(output.stem + '_raw.png') if raw else None
         if raw_path is not None and source.resolve() == raw_path.resolve():
             raise ValueError('Input and raw output must be different files')
-        heat = cv2.resize(predictor(rgb), (rgb.shape[1], rgb.shape[0]), interpolation=cv2.INTER_LINEAR)
+        heat = guided_upsample(predict_heat(rgb), rgb)
         colored = apply_palette(heat, palette)
         Image.fromarray(np.concatenate([rgb, colored], axis=1) if side_by_side else colored).save(output)
         if raw:
@@ -169,8 +182,8 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
                             if len(buffer) != w * h * 3:
                                 raise RuntimeError('Truncated decoded frame')
                             rgb = np.frombuffer(buffer, dtype=np.uint8).reshape(h, w, 3)
-                            heat = smoother.update(predictor(rgb), rgb)
-                            heat = cv2.resize(heat, (w, h), interpolation=cv2.INTER_LINEAR)
+                            heat = smoother.update(predict_heat(rgb), rgb)
+                            heat = guided_upsample(heat, rgb)
                             colored = apply_palette(heat, palette)
                             enc.stdin.write((np.concatenate([rgb, colored], axis=1) if side_by_side else colored).tobytes())
                             if raw_enc:
@@ -220,10 +233,14 @@ def main():
     parser.add_argument('--smoothing', type=float, default=.65, help='previous-frame weight, [0,1); 0 disables')
     parser.add_argument('--raw', action='store_true')
     parser.add_argument('--threads', type=int, default=2)
+    parser.add_argument('--semantic', action=argparse.BooleanOptionalAction, default=True,
+                        help='semantic/emissive heat prior (default on; downloads weights on first use)')
+    parser.add_argument('--semantic-strength', type=float, default=.7, help='prior strength, 0 to 1 (default .7)')
     args = parser.parse_args()
     try:
         convert(args.input, args.output, args.palette, args.size, args.side_by_side,
-                args.weights, args.smoothing, args.raw, args.threads)
+                args.weights, args.smoothing, args.raw, args.threads,
+                args.semantic, args.semantic_strength)
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
         parser.exit(1, f'fake-thermal: {error}\n')
 

@@ -45,6 +45,8 @@ fake-thermal input.mov -o out.mp4 --palette ironbow
 fake-thermal input.mov -o comparison.mp4 --side-by-side --size 512 --smoothing .65 --raw
 fake-thermal photo.jpg -o thermal.png --palette arctic
 fake-thermal input.mov -o out.mp4 --weights fake_thermal/weights/fake_thermal.pt
+fake-thermal input.mov -o model-only.mp4 --no-semantic
+fake-thermal input.mov -o stronger.mp4 --semantic-strength .9
 ```
 
 Palettes: **ironbow**, **white-hot**, **black-hot**, **rainbow**, **arctic**.
@@ -53,11 +55,24 @@ Inference defaults to two CPU threads (`--threads 2`). EMA smoothing defaults
 to .65 previous-frame weight and resets on detected hard cuts; `--smoothing 0`
 disables it. `--raw` adds a grayscale `_raw.mp4` or `_raw.png` alongside output.
 
+**Semantic heat priors are on by default** (`--semantic`, strength .7). A
+pretrained torchvision DeepLabV3 MobileNetV3 model runs at 320px short side,
+using soft probabilities to suggest typical heat for people/animals/vehicles.
+Orange/yellow and very bright white color heuristics suggest flames/lights.
+The prior only raises model heat, before temporal smoothing. Luminance-guided
+upsampling sharpens boundaries at source resolution. These are assumptions,
+not evidence of heat: orange clothing, white walls, reflections and cold
+vehicles can be false positives; actual flames or people can be missed.
+
+First semantic use downloads torchvision's COCO-with-VOC-labels checkpoint
+(about 42 MB) to the Torch cache and requires internet. `--no-semantic` or
+`--semantic-strength 0` avoids that download and the segmentation cost.
+
 ffmpeg decodes MOV/HEVC and rotation metadata, including 4K/60fps inputs. Output
 is H.264 MP4 at source average fps; audio is copied when MP4-compatible, with
 AAC fallback otherwise. Variable-frame-rate timestamps become constant-rate
-timing. Processing is not real-time: early measurements with training running
-were roughly 5 fps at default working size. Real iPhone HDR color handling has
+timing. Processing is not real-time: with training running, default-size demo
+rates were 3–4 fps with semantics and 5–6 fps without. Real iPhone HDR color handling has
 not been validated. See [media behavior and limitations](docs/INFERENCE.md).
 
 ## Web UI
@@ -67,7 +82,7 @@ python app.py
 ```
 
 Open **http://localhost:7860**, upload a video or image, choose palette,
-side-by-side view and smoothing, then click **Run** to preview and download.
+side-by-side view, smoothing, semantic enable/strength, then click **Run** to preview and download.
 Optional grayscale exports are available too. The UI binds all interfaces;
 use it on a trusted local network. No public share tunnel is enabled.
 
@@ -123,7 +138,7 @@ data.** They are not MIT-licensed. Upstream terms still apply; this notice does
 not grant rights beyond those terms, and unrestricted redistribution or
 commercial use is not established. Verify upstream permissions for your use.
 
-The included early checkpoint is iteration 2,000 (validation L1 0.191197), not
+The included early checkpoint is iteration 3,500 (validation L1 0.184265), not
 the final training result. See [weights notice](fake_thermal/weights/README.md).
 
 ## Tests
@@ -135,5 +150,6 @@ python -m unittest discover -s scripts -p 'test_*.py' -v
 
 Tests run without `data/`: preparation tests use synthetic images/keys, sampler
 tests use synthetic source lists, and CLI tests generate random model weights
-and a one-second video with audio. No pretrained encoder download is required
-by tests. GitHub Actions runs both suites with CPU Torch and ffmpeg on Python 3.10.
+and a one-second video with audio. Semantic tests mock segmentation and use
+synthetic class probabilities, colors and edges; no segmentation checkpoint is
+downloaded by tests. GitHub Actions runs both suites with CPU Torch and ffmpeg on Python 3.10.

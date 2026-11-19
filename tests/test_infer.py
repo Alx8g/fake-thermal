@@ -67,7 +67,7 @@ class CLIIntegrationTests(unittest.TestCase):
 
     def cli(self, source, output, *options):
         return subprocess.run([str(Path(sys.executable).with_name('fake-thermal')), str(source), '-o', str(output), '--size', '64',
-                               '--weights', str(self.weights), *options], capture_output=True, text=True)
+                               '--weights', str(self.weights), '--no-semantic', *options], capture_output=True, text=True)
 
     def test_video_audio_frames_fps_and_raw(self):
         output = self.root / 'converted.mp4'
