@@ -4,6 +4,24 @@ CPU-friendly RGB-to-relative-thermal prediction. Public repository:
 https://github.com/Alx8g/fake-thermal (origin configured; not pushed).
 The local checkout remains `~/repos/thermalize`.
 
+## Convert a clip or photo
+
+Requires `ffmpeg` and `ffprobe` on PATH, plus the exported local weights:
+
+```sh
+.venv/bin/pip install -e .
+.venv/bin/python scripts/export_weights.py outputs/ckpt/best.pt
+.venv/bin/fake-thermal input.mov -o out.mp4 --palette ironbow --side-by-side
+.venv/bin/fake-thermal photo.jpg -o thermal.png --palette arctic --raw
+.venv/bin/python app.py  # upload/preview/download UI on port 7860
+```
+
+Palettes: `ironbow`, `white-hot`, `black-hot`, `rainbow`, `arctic`. Default working
+short side is 384 (`--size 512` for more detail); inference uses two CPU threads.
+`--smoothing .65` retains 65% of the prior heat map and resets on detected hard
+cuts; use `--smoothing 0` to disable. `--raw` adds a grayscale `_raw` file.
+See [INFERENCE.md](INFERENCE.md) for behavior, demos, speed and limitations.
+
 See [TRAINING.md](TRAINING.md) for the ResNet18 U-Net, CPU benchmark, training
 commands, checkpoints and validation protocol. Predictions are normalized
 white-hot relative intensity, **not measured temperatures**.
