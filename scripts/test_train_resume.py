@@ -58,6 +58,18 @@ class ResumeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             train.WeightEMA(linear, decay=1.)
 
+    def test_extended_resume_adopts_new_cosine_horizon(self):
+        model = train.ThermalUNet(pretrained=False)
+        optimizer = train.optimizer_for(model)
+        stored = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=20)
+        stored.step()
+        extended = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=40)
+        train.load_scheduler(extended, stored.state_dict(), 40)
+        self.assertEqual(extended.T_max, 40)
+        unchanged = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=20)
+        train.load_scheduler(unchanged, stored.state_dict(), 20)
+        self.assertEqual(unchanged.T_max, 20)
+
     def test_resume_mismatches_reject_frequency_and_ema_changes(self):
         stored = {'batch_size': 16, 'crop': 256, 'seed': 42, 'frequency_alpha': 1., 'ema_decay': .999}
         current = dict(stored, ema_decay=0.)

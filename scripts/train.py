@@ -66,6 +66,14 @@ class WeightEMA:
                 self.shadow[key].copy_(value)
 
 
+def load_scheduler(scheduler, stored, iterations):
+    """Restored state carries the saved cosine horizon; extensions adopt the
+    new one so learning rates keep decaying to the extended endpoint."""
+    scheduler.load_state_dict(stored)
+    if scheduler.T_max != iterations:
+        scheduler.T_max = iterations
+
+
 def resume_mismatches(stored, current):
     keys = ('batch_size', 'crop', 'seed', 'precision', 'layout', 'frequency_alpha', 'ema_decay')
     stored = {**RESUME_DEFAULTS, **stored}
@@ -223,14 +231,15 @@ def train_run(args, train, val, ids):
             raise ValueError('Checkpoint validation split differs from the current data')
         model.load_state_dict(state['model'], strict=True)
         optimizer.load_state_dict(state['optimizer'])
-        scheduler.load_state_dict(state['scheduler'])
+        load_scheduler(scheduler, state['scheduler'], iterations)
         torch.set_rng_state(state['torch_rng'])
         random.setstate(state['python_rng'])
         np.random.set_state(state['numpy_rng'])
         if ema is not None:
             if state.get('ema') is None:
                 raise ValueError('Checkpoint has no EMA state for --ema-decay')
-            ema.shadow = state['ema']
+            ema.shadow = {key: value.to(device=args.device)
+                          for key, value in state['ema'].items()}
         start, best = state['iteration'] + 1, state['best_val_l1']
         stream = iter(train.sampler(iterations * batch))
         remaining = list(islice(stream, (start - 1) * batch, iterations * batch))

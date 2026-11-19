@@ -52,6 +52,21 @@ class TrainingTests(unittest.TestCase):
         self.assertTrue(torch.isfinite(pred.grad).all())
         self.assertGreater(pred.grad.abs().sum().item(), 0)
 
+    def test_focal_frequency_loss_is_bounded_across_crop_sizes(self):
+        from fake_thermal.losses import focal_frequency_loss
+        values = {}
+        for size in (32, 128, 256):
+            pred = torch.full((1, 1, size, size), .5)
+            target = torch.full((1, 1, size, size), .6)
+            value = focal_frequency_loss(pred, target)
+            values[size] = value.item()
+            self.assertTrue(torch.isfinite(value))
+            self.assertLess(value.item(), 1.)
+        self.assertLess(abs(values[256] - values[32]) / values[32], .5)
+        harder = focal_frequency_loss(torch.full((1, 1, 64, 64), .5),
+                                      torch.full((1, 1, 64, 64), .6), alpha=2.)
+        self.assertTrue(torch.isfinite(harder) and harder.item() < 1.)
+
     def test_percentile_stretch_and_constant(self):
         self.assertEqual(normalize_thermal(Image.new('L', (16, 16), 42)).sum(), 0)
         a = normalize_thermal(Image.fromarray(np.arange(256, dtype=np.uint8).reshape(16, 16)))
