@@ -20,11 +20,28 @@ from fake_thermal.semantic import SemanticPrior, fuse_heat
 VARIANTS = ('model', 'fused', 'prior', 'stretched_prior')
 
 
+def lpips_metric():
+    try:
+        import lpips
+    except ImportError:
+        raise SystemExit('--lpips needs the optional lpips package: uv pip install lpips')
+    return lpips.LPIPS(net='alex')
+
+
+def perceptual_distance(metric, prediction, target):
+    """LPIPS between a [0,1] heat map and target, both repeated to RGB."""
+    to_tensor = lambda frame: torch.from_numpy(np.ascontiguousarray(frame)).float() \
+        .unsqueeze(0).repeat(3, 1, 1).unsqueeze(0) * 2 - 1
+    with torch.no_grad():
+        return float(metric(to_tensor(prediction), to_tensor(target)))
+
+
 @torch.inference_mode()
-def evaluate(model, prior, batches, strength, device):
+def evaluate(model, prior, batches, strength, device, perceptual=None):
     if model is not None:
         model.eval()
     totals = {name: {} for name in VARIANTS}
+    distances = {name: {} for name in VARIANTS}
     for rgb, target, names in batches:
         rgb = rgb.to(device=device, dtype=torch.float32, memory_format=memory_format(device))
         heat = model(rgb)[:, 0].cpu().numpy() if model is not None else None
@@ -47,10 +64,25 @@ def evaluate(model, prior, batches, strength, device):
                 entry = totals[variant].setdefault(source, [0., 0])
                 entry[0] += error
                 entry[1] += 1
-    return {variant: {'per_source': {source: round(sum_ / count, 6) for source, (sum_, count)
-                                     in sorted(sources.items())},
-                      'overall': round(sum(v[0] for v in sources.values()) /
-                                       sum(v[1] for v in sources.values()), 6)}
+                if perceptual is not None:
+                    score = perceptual_distance(perceptual, prediction, target[i, 0])
+                    scored = distances[variant].setdefault(source, [0., 0])
+                    scored[0] += score
+                    scored[1] += 1
+    def variant_metrics(variant, sources):
+        metrics = {'per_source': {source: round(sum_ / count, 6) for source, (sum_, count)
+                                  in sorted(sources.items())},
+                   'overall': round(sum(v[0] for v in sources.values()) /
+                                    sum(v[1] for v in sources.values()), 6)}
+        scores = distances[variant]
+        if scores:
+            metrics['lpips'] = {'per_source': {source: round(sum_ / count, 6)
+                                              for source, (sum_, count) in sorted(scores.items())},
+                                'overall': round(sum(v[0] for v in scores.values()) /
+                                                 sum(v[1] for v in scores.values()), 6)}
+        return metrics
+
+    return {variant: variant_metrics(variant, sources)
             for variant, sources in totals.items() if sources}
 
 
@@ -65,6 +97,8 @@ def main():
     parser.add_argument('--workers', type=int, default=2)
     parser.add_argument('--threads', type=int, default=6)
     parser.add_argument('--semantic-strength', type=float, default=.7)
+    parser.add_argument('--lpips', action='store_true',
+                        help='add the LPIPS perceptual metric (optional lpips package)')
     args = parser.parse_args()
     if not 0 <= args.semantic_strength <= 1:
         parser.error('Semantic strength must be between 0 and 1')
@@ -83,22 +117,25 @@ def main():
                         persistent_workers=args.workers > 0, worker_init_fn=seed_worker)
 
     prior = SemanticPrior(size=320, device=device.type)
+    metric = lpips_metric() if args.lpips else None
     results = {'device': device.type, 'images': len(ids), 'crop': crop,
                'semantic_strength': args.semantic_strength,
-               'baseline': evaluate(None, prior, batches, args.semantic_strength, device),
+               'baseline': evaluate(None, prior, batches, args.semantic_strength, device, metric),
                'checkpoints': []}
     for path, state in zip(args.checkpoints, states):
-        model = ThermalUNet(pretrained=False).eval()
         weights = state['ema'] if state.get('ema') is not None else state['model']
+        model = ThermalUNet(pretrained=False,
+                            conditioning=any(key.startswith('style.') for key in weights)).eval()
         model.load_state_dict(weights, strict=True)
         model.to(device=device, dtype=torch.float32, memory_format=memory_format(device))
         entry = {'path': str(path), 'iteration': state['iteration'],
                  'stored_val_l1': round(state['val_l1'], 6),
                  'stored_best_val_l1': round(state['best_val_l1'], 6),
-                 **evaluate(model, prior, batches, args.semantic_strength, device)}
+                 **evaluate(model, prior, batches, args.semantic_strength, device, metric)}
         results['checkpoints'].append(entry)
+        perceptual = f' LPIPS={entry["model"]["lpips"]["overall"]}' if 'lpips' in entry['model'] else ''
         print(f'{path.name}: iter={entry["iteration"]} model_L1={entry["model"]["overall"]} '
-              f'fused_L1={entry["fused"]["overall"]} (stored {entry["stored_val_l1"]})', flush=True)
+              f'fused_L1={entry["fused"]["overall"]}{perceptual} (stored {entry["stored_val_l1"]})', flush=True)
 
     for name, metrics in (('raw prior', results['baseline']['prior']),
                           ('stretched prior', results['baseline']['stretched_prior'])):

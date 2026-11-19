@@ -19,7 +19,7 @@ was tested locally, the measured number is stated.
    fused heat-only-raises; training never sees it.
 6. **Temporal blindness.** Single-frame training plus EMA display smoothing.
 
-## Phase 1 — training-quality wins (implemented, ablation pending)
+## Phase 1 — training-quality wins (delivered)
 
 - **Focal Frequency Loss** (`--frequency-alpha`): adaptively weights
   hard-to-synthesize frequency components. Jiang et al., "Focal Frequency Loss
@@ -30,16 +30,25 @@ was tested locally, the measured number is stated.
 - Measured already: fp16 autocast on MPS gains only ~2.5% at this model size;
   channels-last stays ~23% slower than contiguous (see TRAINING.md). Defaults
   unchanged — benchmarks beat assumptions.
+- **Ablation (3k iterations, fp16, batch 16):** frequency loss −1.9% (best
+  arm, improves every source), weight EMA −1.0%, combined within noise of
+  EMA alone. Both are recommended defaults for future runs; numbers and
+  artifacts in TRAINING.md and `outputs/ablation/`.
 
-## Phase 2 — occlusion-masked temporal filtering
+## Phase 2 — occlusion-masked temporal filtering (delivered)
 
 Replace the EMA `TemporalSmoother` with flow-based consistency: forward/back
 optical flow (cv2, low resolution), forward-backward consistency occlusion
 masks, edge-aware propagation of the previous heat map. Pattern from Bonneel
 et al., "Practical Temporal Consistency for Image-Based Graphics Applications",
-SIGGRAPH Asia 2015. Expected: visibly steadier video, no new dependencies.
-RAFT-in-the-loop was considered and deferred: per-frame network cost, warping
-tears at flow errors, and no published metric supporting the claimed gains.
+SIGGRAPH Asia 2015. Static shots take a single-flow shortcut, keeping the
+end-to-end cost within ~2% of plain EMA at 720p. Measured on a controlled
+6 px/frame pan of real footage: motion-compensated output error 5.73 vs 6.05
+gray levels for plain EMA (5.7% more temporally consistent), with zero-motion
+behavior bit-identical to EMA. `--no-flow-smoothing` restores the previous
+blend. RAFT-in-the-loop was considered and deferred: per-frame network cost,
+warping tears at flow errors, and no published metric supporting the claimed
+gains.
 
 ## Phase 3 — FLIR video pair rescue (+3,747 real pairs)
 
@@ -80,6 +89,19 @@ Plan: conditional flow-matching head on the same ResNet18 U-Net backbone,
 bootstrapped from the v1 regression model as teacher; single forward pass at
 inference (CLI latency unchanged); sampling replaces averaging, so night
 ambiguity yields plausible samples rather than a smear.
+
+**Round-one result (honest):** a plain-CFM FlowUNet warmstarted from the v1
+teacher reached one-step validation L1 0.34 against the teacher's 0.17 after
+11.5k iterations at batch 4, with the validation curve flat after ~7k.
+Multi-step Euler sampling does not close the gap (1-step 0.343, 2-step 0.345,
+4-step 0.349, 8-step 0.352): integration granularity is not the bottleneck —
+the velocity field itself is underfit at this compute budget, consistent
+with MeanFlow's own finding that plain flow matching degrades under single-
+step sampling. Remaining paths: the MeanFlow JVP consistency term
+(arXiv:2505.13447), which is the actual mechanism behind working one-step
+sampling, with a longer schedule and the v2 regression model as warmstart
+teacher; or a shortcut-style teacher-to-data interpolation. Checkpoints and
+log: `outputs_flow/`.
 
 ## Phase 6 (research) — domain expansion
 

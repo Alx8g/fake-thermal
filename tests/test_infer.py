@@ -41,6 +41,41 @@ class PaletteTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 TemporalSmoother(value)
 
+    def test_consistent_mask_forward_backward_logic(self):
+        from fake_thermal.infer import consistent_mask, optical_flow
+        frame = (np.add.outer(np.arange(32) * 3, np.arange(32) * 7) % 251).astype(np.uint8)
+        self.assertLess(np.hypot(*np.moveaxis(optical_flow(frame, frame), -1, 0)).max(), .1)
+        back = np.zeros((8, 8, 2), np.float32)
+        self.assertEqual(consistent_mask(back, back).sum(), 64)
+        back[..., 0] = 1
+        fore = np.zeros((8, 8, 2), np.float32)
+        fore[..., 0] = -1
+        self.assertEqual(consistent_mask(back, fore).sum(), 64)
+        fore[..., 0] = 2
+        self.assertEqual(consistent_mask(back, fore).sum(), 0)
+
+    def test_flow_smoothing_follows_translation(self):
+        pattern = (np.add.outer(np.arange(32) * 3, np.arange(32) * 7) % 251).astype(np.uint8)
+        rgb = np.repeat(pattern[..., None], 3, axis=2)
+        heat = pattern.astype(np.float32) / 255
+        shifted_rgb, shifted_heat = (np.roll(rgb, 4, axis=1), np.roll(heat, 4, axis=1))
+        results = {}
+        for flow in (True, False):
+            smoother = TemporalSmoother(.75, flow=flow)
+            smoother.update(heat, rgb)
+            results[flow] = smoother.update(shifted_heat, shifted_rgb)
+        interior = (slice(4, -4), slice(8, -8))
+        def error(result):
+            return float(np.abs(result[interior] - shifted_heat[interior]).mean())
+        self.assertLess(error(results[True]), error(results[False]))
+        # zero motion must reproduce the plain EMA blend exactly
+        static, legacy = TemporalSmoother(.75), TemporalSmoother(.75, flow=False)
+        static.update(np.zeros((4, 4)), np.zeros((16, 16, 3), np.uint8))
+        legacy.update(np.zeros((4, 4)), np.zeros((16, 16, 3), np.uint8))
+        rgb0 = np.zeros((16, 16, 3), np.uint8)
+        np.testing.assert_allclose(static.update(np.ones((4, 4)), rgb0),
+                                    legacy.update(np.ones((4, 4)), rgb0), atol=1e-6)
+
 
 def streams(path):
     return json.loads(subprocess.check_output(['ffprobe', '-v', 'error', '-show_streams',
