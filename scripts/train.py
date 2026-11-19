@@ -25,7 +25,7 @@ from fake_thermal.model import ThermalUNet
 
 PRECISIONS = ('fp32', 'fp16')
 LAYOUTS = ('auto', 'contiguous', 'channels_last')
-RESUME_DEFAULTS = {'precision': 'fp32', 'layout': 'auto', 'frequency_alpha': 0., 'ema_decay': 0.}
+RESUME_DEFAULTS = {'precision': 'fp32', 'layout': 'auto', 'frequency_alpha': 0., 'ema_decay': 0., 'conditioning': False}
 
 
 def forward(model, rgb, fp16=False):
@@ -75,7 +75,8 @@ def load_scheduler(scheduler, stored, iterations):
 
 
 def resume_mismatches(stored, current):
-    keys = ('batch_size', 'crop', 'seed', 'precision', 'layout', 'frequency_alpha', 'ema_decay')
+    keys = ('batch_size', 'crop', 'seed', 'precision', 'layout', 'frequency_alpha', 'ema_decay',
+            'conditioning')
     stored = {**RESUME_DEFAULTS, **stored}
     current = {**RESUME_DEFAULTS, **current}
     return [f'{key}: {stored.get(key)!r} != {current.get(key)!r}'
@@ -156,8 +157,9 @@ def benchmark(args, train, val):
     candidates = (args.batch_size,) if args.batch_size else (2, 4)
     steps = 50 // len(candidates)
     for batch in candidates:
-        model = ThermalUNet().to(device=args.device, dtype=torch.float32,
-                                 memory_format=memory_format(args.device, args.layout))
+        model = ThermalUNet(conditioning=args.conditioning).to(
+            device=args.device, dtype=torch.float32,
+            memory_format=memory_format(args.device, args.layout))
         optimizer = optimizer_for(model)
         batches = iter(loader(train, batch, args.workers, steps * batch))
         timings = []
@@ -175,8 +177,9 @@ def benchmark(args, train, val):
                         'images_per_second': batch / seconds})
         del batches, optimizer, model
     selected = max(results, key=lambda r: r['images_per_second'])
-    model = ThermalUNet().to(device=args.device, dtype=torch.float32,
-                             memory_format=memory_format(args.device, args.layout))
+    model = ThermalUNet(conditioning=args.conditioning).to(
+        device=args.device, dtype=torch.float32,
+        memory_format=memory_format(args.device, args.layout))
     synchronize(args.device)
     start = time.perf_counter()
     validate(model, loader(val, selected['batch_size'], args.workers), fp16=fp16, layout=args.layout)
@@ -202,7 +205,7 @@ def training_config(args):
         raise ValueError('Run --benchmark first or provide both --batch-size and --iters')
     config.update(batch_size=batch, iterations=iterations, crop=args.crop, device=args.device.type,
                   memory_format=str(memory_format(args.device, args.layout)),
-                  precision=args.precision, layout=args.layout)
+                  precision=args.precision, layout=args.layout, conditioning=args.conditioning)
     return config
 
 
@@ -211,8 +214,8 @@ def train_run(args, train, val, ids):
     config.update(seed=args.seed, frequency_alpha=args.frequency_alpha, ema_decay=args.ema_decay)
     batch, iterations = config['batch_size'], config['iterations']
     fp16 = args.precision == 'fp16'
-    model = ThermalUNet().to(device=args.device, dtype=torch.float32,
-                             memory_format=memory_format(args.device, args.layout))
+    model = ThermalUNet(conditioning=args.conditioning).to(device=args.device, dtype=torch.float32,
+                                                             memory_format=memory_format(args.device, args.layout))
     optimizer = optimizer_for(model)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=iterations)
     start, best, sampler = 1, float('inf'), None
@@ -323,6 +326,8 @@ def build_parser():
                         help='focal frequency loss exponent; 0 disables (default), 1.0 recommended')
     parser.add_argument('--ema-decay', type=float, default=0.,
                         help='weight EMA decay used for checkpointing; 0 disables (default), 0.999 recommended')
+    parser.add_argument('--conditioning', action='store_true',
+                        help='FiLM style conditioning from input luminance statistics (default off)')
     parser.add_argument('--batch-size', type=positive_int)
     parser.add_argument('--iters', type=positive_int)
     parser.add_argument('--crop', type=positive_int, default=256)

@@ -1,4 +1,5 @@
 from collections import Counter
+from pathlib import Path
 import unittest
 
 import numpy as np
@@ -8,6 +9,9 @@ import torch
 from fake_thermal.data import normalize_thermal, PairedDataset
 from fake_thermal.losses import thermal_loss, ssim
 from fake_thermal.model import ThermalUNet
+
+WEIGHTS = Path(__file__).resolve().parents[1] / 'fake_thermal/weights/fake_thermal.pt'
+STYLE_KEYS = {'style.head.0.weight', 'style.head.0.bias', 'style.head.2.weight', 'style.head.2.bias'}
 
 
 class TrainingTests(unittest.TestCase):
@@ -78,6 +82,58 @@ class TrainingTests(unittest.TestCase):
         dataset.sources = ['llvip'] * 100 + ['kaist'] * 10 + ['flir'] * 30
         counts = Counter(dataset.sources[i] for i in dataset.sampler(6000))
         self.assertTrue(all(1800 < n < 2200 for n in counts.values()), counts)
+
+    def test_unconditioned_weights_strict_load(self):
+        model = ThermalUNet(pretrained=False)
+        state = torch.load(WEIGHTS, map_location='cpu', weights_only=True)
+        model.load_state_dict(state, strict=True)
+
+    def test_conditioning_adds_only_style_keys(self):
+        plain = ThermalUNet(pretrained=False)
+        cond = ThermalUNet(pretrained=False, conditioning=True)
+        plain_keys, cond_keys = set(plain.state_dict()), set(cond.state_dict())
+        self.assertEqual(cond_keys - plain_keys, STYLE_KEYS)
+        self.assertFalse(plain_keys - cond_keys)
+        self.assertEqual(tuple(cond.state_dict()['style.head.2.weight'].shape), (2048, 32))
+        self.assertEqual(sum(p.numel() for p in cond.style.parameters()), 67744)
+
+    def test_conditioned_forward_shape_and_backward(self):
+        model = ThermalUNet(pretrained=False, conditioning=True)
+        rgb = torch.rand(2, 3, 64, 96)
+        pred = model(rgb)
+        self.assertEqual(pred.shape, (2, 1, 64, 96))
+        self.assertTrue(torch.isfinite(pred).all())
+        loss = thermal_loss(pred, torch.rand(2, 1, 64, 96))
+        self.assertTrue(torch.isfinite(loss))
+        loss.backward()
+        grads = [p.grad for p in model.style.parameters()]
+        self.assertTrue(all(g is not None and torch.isfinite(g).all() for g in grads))
+        self.assertGreater(sum(g.abs().sum().item() for g in grads), 0)
+
+    def test_film_init_is_identity(self):
+        plain = ThermalUNet(pretrained=False).eval()
+        cond = ThermalUNet(pretrained=False, conditioning=True).eval()
+        result = cond.load_state_dict(plain.state_dict(), strict=False)
+        self.assertEqual(result.unexpected_keys, [])
+        self.assertEqual(set(result.missing_keys), STYLE_KEYS)
+        rgb = torch.rand(2, 3, 96, 128)
+        with torch.no_grad():
+            for h, w in ((257, 319), (33, 65), (256, 256)):
+                y = cond(torch.rand(1, 3, h, w))
+                self.assertEqual(y.shape, (1, 1, h, w))
+            self.assertTrue(torch.allclose(plain(rgb), cond(rgb), atol=1e-6))
+            cond.style.head[-1].bias.add_(1.)
+            self.assertGreater((plain(rgb) - cond(rgb)).abs().max().item(), 1e-4)
+
+    def test_luminance_stats_match_numpy(self):
+        cond = ThermalUNet(pretrained=False, conditioning=True)
+        rgb = torch.rand(3, 3, 17, 29)
+        gray = rgb.mean(dim=1).reshape(3, -1).numpy()
+        expected = np.stack([gray.mean(1), gray.std(1, ddof=1),
+                             np.percentile(gray, 5, axis=1),
+                             np.percentile(gray, 95, axis=1)], axis=1)
+        actual = cond.style.stats(rgb).numpy()
+        np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-7)
 
 
 if __name__ == '__main__':

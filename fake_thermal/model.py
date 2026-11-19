@@ -18,9 +18,39 @@ class DecoderBlock(nn.Module):
         return self.layers(torch.cat([x, skip], dim=1))
 
 
-class ThermalUNet(nn.Module):
-    def __init__(self, pretrained=True):
+class StyleConditioner(nn.Module):
+    """Per-image luminance statistics to FiLM scale/shift for each encoder
+    stage; the head is initialized so modulation starts as the identity."""
+
+    def __init__(self, channels=(64, 64, 128, 256, 512)):
         super().__init__()
+        self.channels = channels
+        self.head = nn.Sequential(nn.Linear(4, 32), nn.ReLU(inplace=True),
+                                  nn.Linear(32, 2 * sum(channels)))
+        nn.init.zeros_(self.head[-1].weight)
+        with torch.no_grad():  # identity FiLM at init: scale=1, shift=0
+            self.head[-1].bias.copy_(torch.cat(
+                [torch.cat([torch.ones(c), torch.zeros(c)]) for c in channels]))
+
+    def stats(self, rgb):
+        gray = rgb.mean(dim=1).flatten(1)
+        return torch.stack([gray.mean(dim=1), gray.std(dim=1),
+                            torch.quantile(gray, .05, dim=1),
+                            torch.quantile(gray, .95, dim=1)], dim=1)
+
+    def forward(self, rgb):
+        style = self.head(self.stats(rgb))
+        films, offset = [], 0
+        for c in self.channels:
+            films.append((style[:, offset:offset + c], style[:, offset + c:offset + 2 * c]))
+            offset += 2 * c
+        return films
+
+
+class ThermalUNet(nn.Module):
+    def __init__(self, pretrained=True, conditioning=False):
+        super().__init__()
+        self.conditioning = conditioning
         self.encoder = resnet18(weights=ResNet18_Weights.DEFAULT if pretrained else None)
         self.encoder.fc = nn.Identity()
         self.up3 = DecoderBlock(512, 256, 128)
@@ -29,19 +59,25 @@ class ThermalUNet(nn.Module):
         self.up0 = DecoderBlock(32, 64, 24)
         self.head = nn.Sequential(nn.Conv2d(24, 16, 3, padding=1), nn.ReLU(inplace=True),
                                   nn.Conv2d(16, 1, 1), nn.Sigmoid())
+        self.style = StyleConditioner() if conditioning else None
         self.register_buffer('mean', torch.tensor([.485, .456, .406]).view(1, 3, 1, 1))
         self.register_buffer('std', torch.tensor([.229, .224, .225]).view(1, 3, 1, 1))
 
+    def film(self, x, params):
+        scale, shift = params
+        return x if scale is None else x * scale[:, :, None, None] + shift[:, :, None, None]
+
     def forward(self, rgb):
         h, w = rgb.shape[-2:]
+        films = self.style(rgb) if self.conditioning else [(None, None)] * 5
         x = F.pad(rgb, (0, (-w) % 32, 0, (-h) % 32), mode='replicate')
         x = (x - self.mean) / self.std
         e = self.encoder
-        s0 = e.relu(e.bn1(e.conv1(x)))
-        s1 = e.layer1(e.maxpool(s0))
-        s2 = e.layer2(s1)
-        s3 = e.layer3(s2)
-        x = e.layer4(s3)
+        s0 = self.film(e.relu(e.bn1(e.conv1(x))), films[0])
+        s1 = self.film(e.layer1(e.maxpool(s0)), films[1])
+        s2 = self.film(e.layer2(s1), films[2])
+        s3 = self.film(e.layer3(s2), films[3])
+        x = self.film(e.layer4(s3), films[4])
         x = self.up0(self.up1(self.up2(self.up3(x, s3), s2), s1), s0)
         x = F.interpolate(x, size=(h + (-h) % 32, w + (-w) % 32),
                           mode='bilinear', align_corners=False)
