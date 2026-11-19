@@ -3,6 +3,9 @@
 Turn RGB videos and photos into a synthetic thermal-camera look, using a
 CPU-friendly ResNet18 U-Net trained on paired RGB/thermal images.
 
+Premiere Pro and DaVinci Resolve plugins are planned; this version provides
+the CLI and web UI only.
+
 **This predicts typical heat appearance, not measured temperature.** It cannot
 recover real thermal information from phone RGB sensors. Colors are relative
 predicted intensity, not Celsius/Fahrenheit. Predictions may be wrong: do not
