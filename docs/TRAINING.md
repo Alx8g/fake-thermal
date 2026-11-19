@@ -223,6 +223,29 @@ frames lack. Conditioned runs are recommended for day-domain accuracy;
 unconditioned remains reasonable where night performance dominates.
 Artifacts: `outputs/cond/`.
 
+### v3: 512px-native data, crop 448 (the resolution run)
+
+Prepared the datasets at 512px short side (native thermal resolution for the
+FLIR video recordings; `data512/`), re-registered the video pairs at native
+640x512, and trained 20,000 iterations at crop 448 with focal frequency loss,
+weight EMA and conditioning. **Best validation L1 0.164636** (EMA, iteration
+14,500), improving every source against the incumbent (FLIR 0.1418, KAIST
+0.1430, LLVIP 0.2095) — though the different crop/resolution regime makes
+this not directly comparable to the 256-crop numbers above.
+
+**The photorealism diagnosis** (Luna-verified side-by-sides plus a CNN patch
+classifier, `scripts/evaluate_realism.py`): validation L1 rewards blur —
+L1-optimal prediction is the conditional mean — and v3 is measurably
+*smoother* than v1 (output texture 0.2-0.4 vs real ~779-2857 Laplacian
+variance). The deployed pipeline (guided edge transfer + sensor simulation)
+reaches 584 vs real 779 texture on FLIR/LLVIP samples; the classifier still
+separates real from fake at 94.2% on 512-native patches. Luna's verdict:
+past the "blobs" stage, scene layout surviving, but still distinguishable by
+missing scene-aligned high-frequency structure. **v4 adds the perceptual
+loss (`--lpips-alpha 0.25`)** to break the L1-blur equilibrium; the realism
+benchmark, not validation L1, is the metric of record for this campaign.
+Artifacts: `outputs/realism_v3.json`, `outputs/morning_v3.png`, `outputs/v3/`.
+
 ### Full-length recipe comparison (v2, 30k iterations)
 
 The v2 run stacked every validated ingredient — focal frequency loss, weight
