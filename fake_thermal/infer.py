@@ -278,7 +278,11 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
     else:
         predictor = Predictor(weights, size, threads, selected_device.type)
         upsample = guided_upsample
-    semantic_predictor = SemanticPrior(device=selected_device.type) if semantic and semantic_strength > 0 else None
+    # With turbo the prior only warms people and animals: its vehicle classes made
+    # parked cars glow and its colour heuristic made lit lamps glow, both tells.
+    unet = engine == 'unet'
+    semantic_predictor = (SemanticPrior(device=selected_device.type, emissive=unet, vehicles=unet)
+                          if semantic and semantic_strength > 0 else None)
     normalizer = DisplayNormalizer() if auto_contrast else None
 
     def predict_heat(rgb):
