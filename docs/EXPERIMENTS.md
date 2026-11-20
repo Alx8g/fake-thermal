@@ -56,6 +56,16 @@ does. With the default motion-compensated smoothing it is steadier than the
 real camera, so the default stays at .65 (a higher weight would add lag on fast
 motion for no visible gain).
 
+**Speed.** On an M1 Pro, one 512x910 (vertical 9:16) turbo frame took 2.53 s:
+VAE decode 1.29 s, VAE encode 0.63 s, UNet 0.65 s; the part-aware prior adds
+0.21 s, smoothing and palette under 0.1 s. Storing the UNet and VAE in fp16 on
+MPS instead of autocasting over fp32 weights brings the model to 2.20 s with
+unchanged held-out scores (KID x1000 38.6 vs 38.9, DISTS 0.283 for both);
+channels-last memory format is slower (3.3 s). Through the full CLI a 6 s
+vertical clip went from 2.79 to 2.53 s per frame. `--stride 2` (model on every
+second frame, heat carried along the optical flow in between) gives 1.31 s per
+frame; carried frames ghost on fast hand movements, so it stays opt-in.
+
 **turbo4 (running).** turbo2 plus 24k steps on one rented 4090 (Texas,
 $0.375/h), with photo-only augmentations (`fake_thermal/augment.py`): synthetic
 lamps, headlight pairs, rows of street lights, lit windows, light pools,
