@@ -48,8 +48,10 @@ def fuse_heat(model, prior, confidence, strength=.7):
 
 
 class SemanticPrior:
-    def __init__(self, size=320, device='auto'):
-        self.size = size
+    def __init__(self, size=320, device='auto', emissive=True):
+        """``emissive=False`` keeps only the class prior (people, animals,
+        vehicles) and drops the colour heuristic for flames and lights."""
+        self.size, self.emissive = size, emissive
         self.device = select_device(device)
         self.weights = DeepLabV3_MobileNet_V3_Large_Weights.DEFAULT
         self.model = None
@@ -69,6 +71,8 @@ class SemanticPrior:
         probabilities = self.model(x)['out'][0].softmax(0).cpu().numpy()
         prior, confidence = probability_prior(probabilities, self.weights.meta['categories'])
         emissive, emissive_confidence = emissive_prior(small)
+        if not self.emissive:
+            emissive_confidence = np.zeros_like(emissive_confidence)
         total = confidence + emissive_confidence
         prior = np.divide(prior * confidence + emissive * emissive_confidence, total,
                           out=np.zeros_like(prior), where=total > 0)

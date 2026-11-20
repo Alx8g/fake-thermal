@@ -89,19 +89,22 @@ def write_real(args):
 
 def generate(args):
     from fake_thermal.infer import Predictor, TurboPredictor, resize_upsample
-    from fake_thermal.semantic import guided_upsample
+    from fake_thermal.semantic import SemanticPrior, fuse_heat, guided_upsample
     from fake_thermal.sensor import ThermalSensor
     if args.engine == 'turbo':
         predictor = TurboPredictor(args.weights, size=args.size, device=args.device, skip=args.skip)
         args.guided = False
     else:
         predictor = Predictor(weights=args.weights, size=args.size, device=args.device, threads=4)
+    prior = SemanticPrior(device=args.device, emissive=args.emissive) if args.semantic else None
     out = ROOT / 'fake' / args.name
     out.mkdir(parents=True, exist_ok=True)
     for i, stem in enumerate(test_ids()):
         with Image.open(args.data / f'pairs/val/rgb/{stem}.jpg') as im:
             rgb = np.asarray(im.convert('RGB'))
         heat = predictor(rgb)
+        if prior is not None:
+            heat = fuse_heat(heat, *prior(rgb, heat.shape), args.semantic)
         heat = guided_upsample(heat, rgb) if args.guided else resize_upsample(heat, rgb)
         if args.sensor:
             heat = ThermalSensor(seed=i).update(heat.astype(np.float32))
@@ -300,6 +303,9 @@ def main():
     p.add_argument('--no-guided', dest='guided', action='store_false')
     p.add_argument('--engine', choices=('unet', 'turbo'), default='unet')
     p.add_argument('--skip', type=float, default=1., help='turbo skip-connection strength')
+    p.add_argument('--semantic', type=float, default=0., help='semantic prior strength (0 = off)')
+    p.add_argument('--no-emissive', dest='emissive', action='store_false',
+                   help='drop the flame/light colour heuristic from the semantic prior')
     p.add_argument('--sensor', action='store_true')
     p = commands.add_parser('metrics')
     p.add_argument('names', nargs='+')
