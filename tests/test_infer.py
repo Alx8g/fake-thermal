@@ -68,6 +68,12 @@ class PaletteTests(unittest.TestCase):
         def error(result):
             return float(np.abs(result[interior] - shifted_heat[interior]).mean())
         self.assertLess(error(results[True]), error(results[False]))
+        # --stride: carrying the previous map along the motion follows the shift too
+        carrier = TemporalSmoother(.75)
+        self.assertIsNone(carrier.carry(rgb))
+        carrier.update(heat, rgb)
+        self.assertLess(error(carrier.carry(shifted_rgb)), error(heat))
+        self.assertIsNone(TemporalSmoother(.75, flow=False).carry(rgb))
         # zero motion must reproduce the plain EMA blend exactly
         static, legacy = TemporalSmoother(.75), TemporalSmoother(.75, flow=False)
         static.update(np.zeros((4, 4)), np.zeros((16, 16, 3), np.uint8))
@@ -118,6 +124,14 @@ class CLIIntegrationTests(unittest.TestCase):
                                              '0:a:0', '-c:a', 'copy', '-f', 'hash', '-hash', 'sha256', '-'])
         self.assertEqual(audio_hash(self.source), audio_hash(output))
         self.assertEqual(probe(self.root / 'converted_raw.mp4')[:3], (96, 64, '6/1'))
+
+    def test_stride_keeps_every_frame(self):
+        output = self.root / 'strided.mp4'
+        result = self.cli(self.source, output, '--stride', '2')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        video = next(s for s in streams(output) if s['codec_type'] == 'video')
+        self.assertEqual(video['nb_frames'], '6')
+        self.assertNotEqual(self.cli(self.source, output, '--stride', '0').returncode, 0)
 
     def test_rotation(self):
         rotated = self.root / 'rotated.mov'

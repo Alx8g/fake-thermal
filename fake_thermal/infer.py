@@ -66,6 +66,28 @@ class TemporalSmoother:
         self.scene_gray = current
         return result
 
+    def carry(self, rgb):
+        """The previous heat map carried along the estimated motion to this frame,
+        with no new prediction (``--stride``); None when there is no history, the
+        scene cut or flow smoothing is off, so the caller must predict."""
+        if self.previous is None or not self.flow:
+            return None
+        scene = cv2.resize(rgb, (64, 64), interpolation=cv2.INTER_AREA).astype(np.float32) / 255
+        if np.abs(scene - self.scene).mean() > self.threshold:
+            return None
+        small = cv2.resize(rgb, flow_grid(self.previous.shape), interpolation=cv2.INTER_AREA)
+        current = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
+        h, w = self.previous.shape
+        back = optical_flow(current, self.scene_gray)
+        gx, gy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+        scale = np.float32([w / back.shape[1], h / back.shape[0]])
+        back_full = cv2.resize(back, (w, h), interpolation=cv2.INTER_LINEAR) * scale
+        result = cv2.remap(self.previous, gx + back_full[..., 0], gy + back_full[..., 1],
+                           interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        self.previous, self.scene, self.scene_gray = result, scene, current
+        self.reset_history = False
+        return result
+
     def propagate(self, heat, current, previous):
         """Blend the previous heat map carried along the estimated motion field."""
         h, w = heat.shape
@@ -218,6 +240,8 @@ class TurboPredictor:
         self.net = Pix2PixTurbo(device=self.device, weights=weights)
         self.net.set_eval()
         self.dtype = torch.float16 if self.device.type in ('cuda', 'mps') else None
+        if self.device.type == 'mps':
+            self.net.half()  # faster than autocast on Apple GPUs
 
     def __call__(self, rgb):
         h, w = rgb.shape[:2]
@@ -256,7 +280,7 @@ def mux_audio(video, original, output):
 def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=False,
             weights=DEFAULT_WEIGHTS, smoothing=.65, raw=False, threads=2,
             semantic=True, semantic_strength=.7, device='auto', auto_contrast=True,
-            flow=True, sensor=True, engine='unet', turbo_weights=DEFAULT_TURBO_WEIGHTS):
+            flow=True, sensor=True, engine='unet', turbo_weights=DEFAULT_TURBO_WEIGHTS, stride=1):
     start = time.perf_counter()
     source, output = Path(input_path), Path(output_path)
     if source.resolve() == output.resolve():
@@ -269,6 +293,8 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
         raise ValueError(f'Unknown engine: {engine}')
     if not np.isfinite(semantic_strength) or not 0 <= semantic_strength <= 1:
         raise ValueError('Semantic strength must be between 0 and 1')
+    if stride < 1:
+        raise ValueError('Stride must be at least 1')
     smoother = TemporalSmoother(smoothing, flow=flow)
     selected_device = select_device(device)
     sensor_sim = ThermalSensor() if sensor else None
@@ -341,7 +367,8 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
                             if len(buffer) != w * h * 3:
                                 raise ValueError(UNREADABLE_MEDIA)
                             rgb = np.frombuffer(buffer, dtype=np.uint8).reshape(h, w, 3)
-                            heat = smoother.update(predict_heat(rgb), rgb)
+                            carried = smoother.carry(rgb) if frames % stride else None
+                            heat = carried if carried is not None else smoother.update(predict_heat(rgb), rgb)
                             heat = upsample(heat, rgb)
                             if sensor_sim is not None:
                                 heat = sensor_sim.update(heat)
@@ -409,6 +436,10 @@ def main():
                         help='temporally stable percentile display contrast (default on; raw is unaffected)')
     parser.add_argument('--flow-smoothing', action=argparse.BooleanOptionalAction, default=True,
                         help='carry the previous heat map along estimated motion with occlusion masking (default on)')
+    parser.add_argument('--stride', type=int, default=1,
+                        help='run the model on every Nth video frame and carry the heat map along the '
+                             'estimated motion in between; 2 nearly halves turbo render time, fast motion '
+                             'can smear (default 1: every frame)')
     parser.add_argument('--sensor-sim', action=argparse.BooleanOptionalAction, default=None,
                         help='simulated microbolometer noise, banding and vignette (default on for unet, '
                              'off for turbo, which synthesizes its own sensor texture)')
@@ -420,7 +451,7 @@ def main():
         convert(args.input, args.output, args.palette, args.size, args.side_by_side,
                 args.weights, args.smoothing, args.raw, args.threads,
                 args.semantic, args.semantic_strength, args.device, args.auto_contrast,
-                args.flow_smoothing, args.sensor_sim, args.engine, args.turbo_weights)
+                args.flow_smoothing, args.sensor_sim, args.engine, args.turbo_weights, args.stride)
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
         parser.exit(1, f'fake-thermal: {error}\n')
 
