@@ -1,5 +1,36 @@
 # Roadmap
 
+## Direction after 20 Nov 2026
+
+Blind tests (docs/EXPERIMENTS.md) settled the main question: no regression
+U-Net, with perceptual, adversarial or sensor-noise additions, survives a
+side-by-side look at real thermal, and none passes as real on its own. A large
+pretrained image model fine-tuned for one-step translation (pix2pix-Turbo on
+SD-Turbo, `--engine turbo`) is the first thing that does: on single frames,
+judges called it generated about as often as real footage. The U-Net stays as
+the fast engine; the turbo engine is the photographic one.
+
+Next, in order of expected value:
+
+1. **Physics tells.** Judges still catch turbo frames side by side because
+   they copy visible-light detail: see-through windscreens (glass is opaque in
+   LWIR), road paint and logos, glare from lit lamps and headlights, and
+   people whose heat follows clothing brightness. Levers: the RGB-conditioned
+   critic (`--pair-gan-weight`), a people/animals-only semantic prior, and
+   training data where these cases are common.
+2. **Data diversity.** Training data is driving, surveillance and night
+   streets from three cameras. Larger aligned RGB-thermal sets exist, e.g.
+   LasHeR (1,224 aligned visible/thermal video pairs, 730K+ frame pairs, far
+   more varied scenes); check each licence before use.
+3. **Video.** Turbo is deterministic per frame (latent mode, no noise), and
+   the motion-compensated smoother still applies, but its temporal stability
+   on real footage has not been measured yet.
+4. **Speed.** Turbo runs ~0.5 frames/s on an M1 Pro. Distilling it into a
+   smaller student, or running it on a rented GPU for long clips, are the
+   options; realtime is out of reach for SD-Turbo-size models on a laptop.
+
+The phases below are the earlier plan (19-20 Nov), kept for the record.
+
 The v1 model predicts a plausible thermal appearance and disclaims thermometry.
 Everything below keeps that positioning. Each phase is independently shippable,
 CI-tested, and justified by published evidence rather than hype; where a claim
