@@ -131,7 +131,14 @@ def main():
     report = {'frames': len(rgb), 'tracked_fraction': float(np.mean([v.mean() for _, _, v in flows]))}
     for name, frames in streams.items():
         errors = warp_error(frames, flows)
-        report[name] = {'mean': float(np.mean(errors)), 'p90': float(np.percentile(errors, 90))}
+        # Own-flow error: motion estimated on the stream itself. Registered real
+        # thermal jitters against the colour video's flow, so this is the fair
+        # comparison with the real camera; it under-counts flicker that looks
+        # like motion, equally for every stream.
+        own = [(f * 255).astype(np.uint8) for f in frames]
+        own_errors = warp_error(frames, [flow_pair(a, b, dis) for a, b in zip(own[:-1], own[1:])])
+        report[name] = {'mean': float(np.mean(errors)), 'p90': float(np.percentile(errors, 90)),
+                        'own_flow_mean': float(np.mean(own_errors))}
     (args.out / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
 
