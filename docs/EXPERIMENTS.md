@@ -73,18 +73,68 @@ dark speckled blotches, caught burned-in captions and white objects, and
 missed ceiling LEDs in flat, low-contrast footage, which never fully blow
 out. Lights are left to the training-side augmentation.
 
-**turbo4 (running).** turbo2 plus 24k steps on one rented 4090 (Texas,
-$0.375/h), with photo-only augmentations (`fake_thermal/augment.py`): synthetic
-lamps, headlight pairs, rows of street lights, lit windows, light pools,
-printed text and paint stripes pasted onto the photo while the thermal target
-stays unchanged, and night darkening of photos that are not already dark.
-Probabilities .35 / .15 / .2; cosine learning rate 1e-5 to 1e-6;
+**turbo4 (ships).** turbo2 plus 24k steps on one rented 4090 (Texas,
+$0.375/h, 5.7 h), with photo-only augmentations (`fake_thermal/augment.py`):
+synthetic lamps, headlight pairs, rows of street lights, lit windows, light
+pools, printed text and paint stripes pasted onto the photo while the thermal
+target stays unchanged, and night darkening of photos that are not already
+dark. Probabilities .35 / .15 / .2; cosine learning rate 1e-5 to 1e-6;
 checkpointing only the VAE (0.85 s per step, against 1.06 with full
 checkpointing; full no-checkpointing runs out of memory at batch 2). A first
 rented host went offline within minutes and was destroyed (about $0.05). The
 second host bills bandwidth at $29/TB, so pushing the data and downloading
 SD-Turbo cost $0.36 before training started; check `inet_down_cost` before
 renting.
+
+Held-out frames, all with the part-aware semantic prior at .7:
+
+| Model | KID x1000 | DISTS | DISTS FLIR / KAIST / LLVIP |
+| --- | --- | --- | --- |
+| turbo2 (was shipped) | 38.9 | .2828 | .330 / .241 / .278 |
+| turbo4 6k | 36.9 | .2785 | |
+| turbo4 12k | 35.6 | .2691 | .309 / .232 / .267 |
+| turbo4 21k | 32.6 | .2671 | .305 / .228 / .268 |
+| turbo4 24k (final) | 33.5 | .2687 | .309 / .230 / .267 |
+| turbo4, mean of 20k-24k snapshots | 32.5 | .2676 | .306 / .229 / .268 |
+
+KID's spread over subsets is about 4, so the snapshots from 12k on are tied
+with each other; all beat turbo2 on every source. The snapshot mean ships
+(averaging removes some of the adversarial step-to-step noise).
+
+Blind rounds against turbo2, twice the size of earlier rounds: side by side
+(`r5`, 48 frames per model, each seen by two of eight judges, 96 judgements
+per model) and single frames (`s4`, 45 per model plus 45 real, five judges).
+
+| Test | turbo2 | turbo4 | real |
+| --- | --- | --- | --- |
+| fake spotted next to the real frame | 83.3% (KAIST 17/32) | 86.5% (KAIST 19/32) | |
+| single frame called generated | 75.6% | 75.6% | 33.3% |
+| preferred on 16 of the user's own frames (4 judges, 64 pairs) | 32 | 32 | |
+
+The blind tests do not separate the two models (three judgements in 96 apart).
+Judges' stated tells moved: "dark blobs" (soft black rings on lamp heads and
+in the sky) were the reason in 18 caught turbo2 pairs and 7 turbo4 ones, while copied
+visible light (headlight beams and street-light pools on the ground, glowing
+traffic signals, lit shop fronts) stayed the main tell for both (23 and 28).
+The augmentation pasted light *sources* onto photos; the light those sources
+cast on surfaces is what still gives the model away, and indoor ceiling LEDs
+and a large balloon light still glow. turbo4 ships for the lower KID and
+DISTS on every source and the fewer dark blobs, with no measured loss.
+
+**Fixed: rectangles around mid-size people.** The same rounds caught a warm
+rectangle around people 15-35% of the frame tall in LLVIP night scenes
+("pasted rectangle", "bright boxed patches around figures", six sheets). The
+selfie segmenter behind the part-aware prior, run on a dim full-body crop,
+claims 60-90% of the crop as person and leaves a haze of partial confidence
+over the rest, and the prior was blended over the whole padded crop with a
+step at its edge. Now a crop is rejected unless the segmenter's person mask
+overlaps the person found by the class prior by IoU .3 (the worst night crops
+measured .14-.25, the user's close-ups .40-.93), and the part prior only covers
+a band around the person (6% of their height) that fades to zero at its edge,
+so even a crop that passes cannot spread past that band. The
+user's 16 close-up frames change by under 1% on average (the largest change,
+3%, is a second person in the background); held-out scores are unchanged
+(turbo2 KID x1000 38.85, DISTS .2826; turbo4 32.6, .2675).
 
 ## How realism is measured (from 20 Nov 2026, afternoon)
 
@@ -203,7 +253,12 @@ because it turned parked cars into hot blobs. Inference on an M1 Pro: about
 
 ## Cost
 
-Vast credit: $10.00 at the start of the cloud work, $3.72 at the end.
+Vast credit: $10.00 at the start of the cloud work, $3.72 after the afternoon,
+$1.01 at the end.
+
+- Night, turbo4 (20-21 Nov): $2.71, of which about $0.05 for the host that went
+  offline and $0.36 for bandwidth on the second host before training began.
+  The watcher destroyed the box as soon as the run finished.
 
 - Morning sweep (three 4090 arms, one lost; previous agent): about $2.70,
   including about 40 minutes of idle billing after the arms finished because

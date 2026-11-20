@@ -11,11 +11,14 @@ every time.
 
 `turbo.pt` (turbo engine, ~19 MB fp16): pix2pix-Turbo LoRA, input-conv and
 VAE-skip weights for SD-Turbo, trained 11k steps at batch 2 on 512px crops
-(`turbo2`). SD-Turbo itself is downloaded from Hugging Face on first use and
-is under its own licence. Held-out realism: KID x1000 40, DISTS 0.281; with
-the people-and-animals semantic prior, blind judges spotted it next to the
-real frame 83% of the time (50% on KAIST street scenes) and called single
-frames generated 63% of the time (real frames: 30%).
+(`turbo2`), then 24k more with photo-only light, print and night-darkening
+augmentation and a cosine learning-rate decay; the shipped file is the
+average of the snapshots at 20k-24k (`turbo4`). SD-Turbo itself is
+downloaded from Hugging Face on first use and is under its own licence.
+Held-out realism with the semantic prior: KID x1000 32.6, DISTS 0.268
+(turbo2: 38.9, 0.283). Blind judges spotted it next to the real frame 86% of
+the time (59% on KAIST street scenes) and called single frames generated 76%
+of the time (real frames: 33%), level with turbo2 in the same rounds.
 
 Both are plausible thermal-appearance models, not calibrated temperature
 models. Full measurements: [docs/EXPERIMENTS.md](../../docs/EXPERIMENTS.md).
