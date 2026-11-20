@@ -109,8 +109,11 @@ fake-thermal input.mov -o out.mp4 --engine turbo --turbo-weights path/to/turbo.p
 The default U-Net engine is fast but its output stays visibly smooth. The
 turbo engine runs pix2pix-Turbo: one denoising step of SD-Turbo with LoRA
 adapters fine-tuned on paired RGB/thermal footage. It renders much sharper,
-more photographic thermal texture, at about 1.4-1.9 s per frame on an M1 Pro
-(512 working short side), so it suits offline video work, not live use.
+more photographic thermal texture, at about 2.5 s per vertical 9:16 frame on
+an M1 Pro (512 working short side; landscape frames are faster), so it suits
+offline video work, not live use. `--stride 2` runs the model on every second
+frame and carries the heat along the estimated motion in between: about 1.3 s
+per frame, with some smearing on fast movement such as waving hands.
 It downloads SD-Turbo (~5 GB) from Hugging Face on first use; check
 [SD-Turbo's licence](https://huggingface.co/stabilityai/sd-turbo) before any
 commercial use. With the turbo engine the semantic prior warms only people and
