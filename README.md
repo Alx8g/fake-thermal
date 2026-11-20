@@ -121,14 +121,15 @@ animals (vehicles excluded, edges fitted to the photo) and sensor simulation
 defaults off (it synthesizes its own sensor texture); temporal smoothing, auto
 contrast and palettes work as before.
 
-People large enough to segment get body-part heat instead of one uniform level:
-exposed skin hottest, clothing warm but cooler, hair, caps, masks and glasses
-cooler still. Parts come from Google's MediaPipe multiclass selfie segmenter
-(`mediapipe` package, Apache 2.0 model card; the ~16 MB model downloads to the
-Torch cache on first use); distant people keep the uniform level, and without
-`mediapipe` every person does. In a blind test on close-up frames, judges
-preferred the part-aware rendering 46 times out of 48. Realism and flicker
-measurements for both engines are in [the experiment log](docs/EXPERIMENTS.md).
+With either engine, people large enough to segment get body-part heat instead
+of one uniform level: exposed skin hottest, clothing warm but cooler, hair,
+caps, masks and glasses cooler still. Parts come from Google's MediaPipe
+multiclass selfie segmenter (`pip install mediapipe`, Apache 2.0 model card;
+the ~16 MB model downloads to the Torch cache on first use). Distant people keep
+the uniform level, and without `mediapipe` every person does. In a blind test on
+close-up frames, judges preferred the part-aware turbo rendering 46 times out of
+48. Realism and flicker measurements for both engines are in
+[the experiment log](docs/EXPERIMENTS.md).
 
 ## Web UI
 
