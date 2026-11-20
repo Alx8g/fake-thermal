@@ -173,6 +173,9 @@ def main():
     parser.add_argument('--init', type=Path, help='continue from saved Turbo weights (fresh optimizers)')
     parser.add_argument('--device', default='cuda')
     parser.add_argument('--no-checkpointing', dest='checkpointing', action='store_false')
+    parser.add_argument('--vae-checkpointing-only', action='store_true',
+                        help='checkpoint only the VAE (its 512px activations are what overflow 24 GB); '
+                             'the UNet runs at latent size and is faster without it')
     parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
 
@@ -194,7 +197,9 @@ def main():
     if args.init:
         print(f'INIT weights from {args.init}', flush=True)
     net.set_train()
-    if args.checkpointing:
+    if args.checkpointing and args.vae_checkpointing_only:
+        net.vae.encoder.checkpointing = net.vae.decoder.checkpointing = True
+    elif args.checkpointing:
         net.enable_checkpointing()
     params = net.trainable_parameters()
     print(f'START trainable={sum(p.numel() for p in params) / 1e6:.1f}M params', flush=True)
