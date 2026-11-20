@@ -15,12 +15,15 @@ CLASS_HEAT = {
     'cat': .85, 'dog': .85, 'horse': .85, 'sheep': .85, 'cow': .85, 'bird': .85,
     'car': .6, 'bus': .6, 'motorbike': .6, 'train': .6,
 }
+VEHICLES = ('car', 'bus', 'motorbike', 'train')
 
 
-def probability_prior(probabilities, categories):
+def probability_prior(probabilities, categories, vehicles=True):
     confidence = np.zeros(probabilities.shape[1:], dtype=np.float32)
     weighted = np.zeros_like(confidence)
     for name, heat in CLASS_HEAT.items():
+        if not vehicles and name in VEHICLES:
+            continue
         probability = probabilities[categories.index(name)]
         confidence += probability
         weighted += heat * probability
@@ -48,10 +51,11 @@ def fuse_heat(model, prior, confidence, strength=.7):
 
 
 class SemanticPrior:
-    def __init__(self, size=320, device='auto', emissive=True):
-        """``emissive=False`` keeps only the class prior (people, animals,
-        vehicles) and drops the colour heuristic for flames and lights."""
-        self.size, self.emissive = size, emissive
+    def __init__(self, size=320, device='auto', emissive=True, vehicles=True):
+        """``emissive=False`` drops the colour heuristic for flames and lights;
+        ``vehicles=False`` drops vehicle classes (parked cars read cold in real
+        thermal), leaving people and animals."""
+        self.size, self.emissive, self.vehicles = size, emissive, vehicles
         self.device = select_device(device)
         self.weights = DeepLabV3_MobileNet_V3_Large_Weights.DEFAULT
         self.model = None
@@ -69,7 +73,8 @@ class SemanticPrior:
         x = (x - x.new_tensor([.485, .456, .406])[None, :, None, None]) / x.new_tensor(
             [.229, .224, .225])[None, :, None, None]
         probabilities = self.model(x)['out'][0].softmax(0).cpu().numpy()
-        prior, confidence = probability_prior(probabilities, self.weights.meta['categories'])
+        prior, confidence = probability_prior(probabilities, self.weights.meta['categories'],
+                                              self.vehicles)
         emissive, emissive_confidence = emissive_prior(small)
         if not self.emissive:
             emissive_confidence = np.zeros_like(emissive_confidence)
