@@ -9,10 +9,9 @@ a ``translate`` helper for arbitrary frame sizes.
 The base model is stabilityai/sd-turbo, downloaded from Hugging Face on first
 use; check its licence before any commercial use.
 """
-import copy
-
 import torch
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
 BASE = 'stabilityai/sd-turbo'
 VAE_TARGETS = ['conv1', 'conv2', 'conv_in', 'conv_shortcut', 'conv', 'conv_out',
@@ -23,12 +22,20 @@ UNET_TARGETS = ['to_k', 'to_q', 'to_v', 'to_out.0', 'conv', 'conv1', 'conv2', 'c
 PROMPT = 'a thermal infrared camera image, white hot'
 
 
+def _run(module, block, *inputs):
+    """Activation checkpointing for VAE blocks while training: the 512px decoder
+    activations alone overflow a 24 GB GPU at batch 2."""
+    if getattr(module, 'checkpointing', False) and module.training and torch.is_grad_enabled():
+        return checkpoint(block, *inputs, use_reentrant=False)
+    return block(*inputs)
+
+
 def _encoder_forward(self, sample):
     sample = self.conv_in(sample)
     blocks = []
     for down_block in self.down_blocks:
         blocks.append(sample)
-        sample = down_block(sample)
+        sample = _run(self, down_block, sample)
     sample = self.mid_block(sample)
     sample = self.conv_act(self.conv_norm_out(sample))
     sample = self.conv_out(sample)
@@ -44,7 +51,7 @@ def _decoder_forward(self, sample, latent_embeds=None):
     for index, up_block in enumerate(self.up_blocks):
         if not self.ignore_skip:
             sample = sample + skips[index](self.incoming_skip_acts[::-1][index] * self.gamma)
-        sample = up_block(sample, latent_embeds)
+        sample = _run(self, up_block, sample, latent_embeds)
     sample = self.conv_norm_out(sample) if latent_embeds is None else self.conv_norm_out(sample, latent_embeds)
     return self.conv_out(self.conv_act(sample))
 
@@ -96,6 +103,10 @@ class Pix2PixTurbo(nn.Module):
         self.timesteps = torch.tensor([999], device=self.device_name).long()
         self.to(self.device_name)
         self._prompt_cache = {}
+
+    def enable_checkpointing(self):
+        self.unet.enable_gradient_checkpointing()
+        self.vae.encoder.checkpointing = self.vae.decoder.checkpointing = True
 
     def trainable_parameters(self):
         params = [p for n, p in self.unet.named_parameters() if 'lora' in n]

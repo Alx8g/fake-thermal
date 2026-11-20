@@ -168,7 +168,7 @@ def main():
     net = Pix2PixTurbo(device=device)
     net.set_train()
     if args.checkpointing:
-        net.unet.enable_gradient_checkpointing()
+        net.enable_checkpointing()
     params = net.trainable_parameters()
     print(f'START trainable={sum(p.numel() for p in params) / 1e6:.1f}M params', flush=True)
     optimizer = torch.optim.AdamW(params, lr=args.lr, weight_decay=1e-2)
