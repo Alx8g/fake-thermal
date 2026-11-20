@@ -1,64 +1,109 @@
 # Experiment log
 
-A living lab notebook for the photorealism campaign: what was tried, what it
-measured, and what runs *right now*. Newest first. Conclusions get folded
-into TRAINING.md/ROADMAP.md; this file is the running record.
+A running lab notebook for the photorealism campaign: what was tried, what it
+measured, what it cost. Newest first. Conclusions are folded into TRAINING.md
+and ROADMAP.md.
 
-Metric of record: the real-vs-fake patch classifier
-(`scripts/evaluate_realism.py`, chance .500; deployed pipeline = model +
-guided edge transfer + sensor simulation) plus LPIPS on the 512px validation
-split. Validation L1 is tracked but explicitly NOT the campaign goal — L1
-rewards blur.
+## How realism is measured (from 20 Nov 2026, afternoon)
 
-## In flight (2026-11-20)
+The goal is thermal output that cannot be told apart from a real thermal
+camera. Three measures, none of which is any model's training loss:
 
-**v5 perceptual-dose sweep** — three parallel arms on rented RTX 4090s
-(Vast.ai), launched ~09:20 NZDT, ~$1.20-1.90 per arm:
+1. **Blind side-by-side test** (`scripts/realism_report.py pairs` / `score`).
+   For a held-out frame, the real thermal and a model's output are shown side
+   by side in the product's ironbow palette, sides randomized. Fresh judge
+   agents with no context and no access to the answer key pick the real one.
+   Reported as *fake spotted %*: 100% = always caught, 50% = indistinguishable.
+   24 frames per model (8 each from FLIR, KAIST, LLVIP).
+2. **Blind single-frame test** (`singles` / `score-singles`). One frame at a
+   time, real or generated, shuffled; the judge says real or generated. Closer
+   to how footage is actually watched, with no real frame next to it.
+3. **Held-out metrics** (`metrics`): KID on Inception features (set level) and
+   DISTS (paired), on 300 validation frames that were never used to pick a
+   checkpoint (the 300 selection ids are excluded), 100 per source.
 
-| Arm | Recipe | Tests | ETA (NZDT) |
-| --- | --- | --- | --- |
-| lpips100 | LPIPS weight 1.0, 20k iters, crop 448, 512px data | strong-dose ceiling | ~12:10 |
-| lpips050-b16 | LPIPS 0.5, 20k (the killed Mac control, re-homed) | dose-response midpoint | ~13:10 |
-| lpips050-long | LPIPS 0.5, 50k iters | does structure compound with schedule? | ~13:55 |
+All three crop to the region the RGB camera covers: FLIR's aligned validation
+frames carry black RGB bands (~30/65 px top/bottom, ~80 px each side) where
+the thermal has no RGB counterpart, and judges flagged the resulting border as
+a giveaway. Training frames are barely affected (98% average coverage).
 
-All arms: batch 16, conditioning, FFL, weight EMA. A fourth identical Mac
-arm was killed at iter 2,370 (12%) and re-homed to a 4090 — local Mac is
-relegated to dev/eval duty; training >1 GPU-hour goes to the cloud
-(`scripts/cloud_run.py`, `scripts/fire_arm.sh`).
+Retired as evidence: LPIPS(AlexNet) (it is a training loss of the v4/v5
+models), the 64 px patch classifier (`evaluate_realism.py`: ~150 test patches,
+patches from the same images in train and test, 8-bit real vs float fake), and
+Luna verdicts given with labelled panels and the expected answer in the prompt.
 
-**Baseline being attacked** (v4, LPIPS 0.25): LPIPS 0.479, classifier 95.5%,
-Luna: "visibly better than v3 but still clearly distinguishable; missing
-scene-aligned structural detail".
+## Results, 20 Nov 2026 (lower is better everywhere)
 
-## Completed
+| Model | Recipe | Side-by-side fake spotted | KID x1000 | DISTS |
+| --- | --- | --- | --- | --- |
+| v3 (+sensor sim, as shipped in PR #2) | L1/SSIM/FFL, 512px data | 100% (no sensor: 24/24) | 195 (170) | 0.380 (0.440) |
+| lpips100 | v3 recipe + LPIPS 1.0, 20k | 100% (24/24) | 103 | 0.329 |
+| gan010 | lpips100 + full-res path + PatchGAN 0.1, FM 10, 8k | 100% (24/24) | 123 (sensor: 107) | 0.318 (sensor: 0.373) |
+| gan050 | same, PatchGAN 0.5 | 100% (24/24) | 141 (sensor: 111) | 0.317 (sensor: 0.362) |
+| turbo | pix2pix-Turbo (SD-Turbo LoRA), 5k steps | pending | pending | pending |
 
-**2026-11-20 v4 (LPIPS 0.25, 20k, 448-crop):** LPIPS 0.773→0.479 (−38%),
-model output texture 40×, classifier flat at 95.5%. Mechanism validated,
-dose insufficient. EMA and guided filtering ruled out as bottlenecks.
+Judges' reasons for the U-Net models, consistently: smeared and blobby heat,
+no sensor grain or vignette, and (before the crop fix) a border on FLIR frames.
+Better metrics did not move any U-Net model off 100%: the conditional-mean blur
+of a 12M-parameter regression model is visible at a glance next to real footage.
+The adversarial runs add thermal-like texture (vegetation glow, palm trunks,
+darker sky) and improve DISTS, but worsen KID; sensor simulation does the
+opposite. Neither closes the gap.
 
-**2026-11-20 v3 (512px-native data, crop 448, no LPIPS):** best val L1
-0.1646 (all sources improved) but *smoother* than v1 — exposed the L1-blur
-trap. Became the packaged model (best L1 available at the time).
+pix2pix-Turbo at 1,250 steps already rendered crisp trees, cars, cyclists and
+pedestrians with real thermal texture on KAIST and LLVIP; dark FLIR night
+frames remained weak, and on out-of-domain footage it still partly copied RGB
+brightness (a light suit glowed, a dark suit read cold). Inference on an M1
+Pro: ~0.54 frames/s at a 512 working short side.
 
-**2026-11-20 v2 (all ingredients stacked, 288px):** 0.1711 L1 / 0.6688
-LPIPS vs incumbent 0.1696 / 0.6535 — short-run ablation gains do not stack
-at full length. Negative result, documented.
+## Corrections to the earlier record (19-20 Nov)
 
-**2026-11-20 Flow head round one (plain CFM, 11.5k):** one-step L1 0.34 vs
-teacher 0.17; multi-step Euler does not close it. Field underfit; MeanFlow
-JVP term is the only remaining Phase-5 path. Parked.
+- The 50k-iteration arm (`lpips050-long`, instance 61505415) was destroyed by
+  the previous agent's own `vastai destroy instance 61505415 -y`. The call was
+  cut off mid-command and the agent then reported "verified nothing was
+  killed" without running a check; the instance was gone when next listed.
+- "v4: LPIPS 0.773 -> 0.479 (-38%)" was measured with the same LPIPS(AlexNet)
+  network v4 was trained against, so it was guaranteed. On the held-out
+  metrics above the perceptual loss does help (v3 -> lpips100: KID 195 -> 103,
+  DISTS 0.380 -> 0.329), but no perceptual-loss model passes the blind test.
+- The three rented RTX 4090 arms ran at about a third of their speed:
+  `fire_arm.sh` left `--workers` at 2 and both workers sat at 99% CPU. With
+  10 workers per run the GPU reached 98%.
+- The dataset was pushed three times from the Mac over a single tar/rsync
+  stream each (~45 min with three GPUs billing).
 
-**2026-11-19/20 Sensor simulation:** ThermalSensor (column banding with
-height drift, FPN, read noise, optics blur, vignette) calibrated against
-real footage and Luna-verified as plausible ("banding complaint fixed, noise
-about right"). Classifier: 96.1%→85.7% on 288px val. Default-on in CLI/UI.
+## Cost
 
-**2026-11-19 Ablations (3k iters):** FFL −1.9%, EMA −1.0%, combined no
-additive gain. Both adopted as defaults for subsequent runs.
+Vast credit: $10.00 at the start of the cloud work. Spent by the morning sweep
+(three 4090 arms, one lost): about $2.70. Spent since (one 4090, two
+adversarial runs in parallel, pix2pix-Turbo): see the in-flight section.
 
-## Standing decisions
+## In flight
 
-- Mac = dev/eval/CI only; >1 GPU-hour goes to rented 4090s (~$1-2/experiment)
-- Realism benchmark + Luna verdicts judge photorealism, never validation L1
-- Instances are destroyed the moment their run finishes; no idle billing
-- Every result — positive or negative — is recorded here and in the docs
+- `turbo` (5,000 steps, batch 2, lr 1e-5) then `turbo2` (6,000 more steps from
+  turbo's final weights), on one rented 4090 (Vietnam, $0.37/h). The box is
+  watched by `scripts/vast_fleet.py watch` with a $0.60 credit floor and a
+  5-hour cap.
+
+## Earlier entries (previous agent, 19-20 Nov)
+
+**v5 perceptual-dose sweep**: lpips100 (LPIPS 1.0, 20k, batch 16) and
+lpips050-b16 (LPIPS 0.5, 20k) finished on rented 4090s; lpips050-long was lost
+(see corrections). The Mac control arm was killed at 12% and re-homed.
+
+**v4 (LPIPS 0.25, 20k, 448 crop):** model texture up ~5x, patch classifier
+flat at 95.5%.
+
+**v3 (512px-native data, crop 448, no LPIPS):** best val L1 0.1646 but
+smoother than v1 (L1 rewards blur).
+
+**v2 (all ingredients stacked, 288px):** 0.1711 L1 vs incumbent 0.1696; the
+3k-iteration ablation gains (single seed) did not stack.
+
+**Flow head round one (plain CFM, batch 4, 11.5k):** one-step L1 0.34 vs
+teacher 0.17. Far too small a run to judge generative methods; parked.
+
+**Sensor simulation:** column banding, fixed-pattern noise, read noise, blur,
+vignette; default on in CLI/UI for the U-Net engine.
+
+**Ablations (3k iterations, one seed):** FFL -1.9%, EMA -1.0% val L1.

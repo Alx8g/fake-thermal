@@ -88,18 +88,21 @@ def write_real(args):
 
 
 def generate(args):
-    from fake_thermal.infer import Predictor
+    from fake_thermal.infer import Predictor, TurboPredictor, resize_upsample
     from fake_thermal.semantic import guided_upsample
     from fake_thermal.sensor import ThermalSensor
-    predictor = Predictor(weights=args.weights, size=args.size, device=args.device, threads=4)
+    if args.engine == 'turbo':
+        predictor = TurboPredictor(args.weights, size=args.size, device=args.device)
+        args.guided = False
+    else:
+        predictor = Predictor(weights=args.weights, size=args.size, device=args.device, threads=4)
     out = ROOT / 'fake' / args.name
     out.mkdir(parents=True, exist_ok=True)
     for i, stem in enumerate(test_ids()):
         with Image.open(args.data / f'pairs/val/rgb/{stem}.jpg') as im:
             rgb = np.asarray(im.convert('RGB'))
         heat = predictor(rgb)
-        heat = guided_upsample(heat, rgb) if args.guided else cv2.resize(
-            heat, (rgb.shape[1], rgb.shape[0]), interpolation=cv2.INTER_LINEAR)
+        heat = guided_upsample(heat, rgb) if args.guided else resize_upsample(heat, rgb)
         if args.sensor:
             heat = ThermalSensor(seed=i).update(heat.astype(np.float32))
         Image.fromarray(stretch8(heat)).save(out / f'{stem}.png')
@@ -285,6 +288,7 @@ def main():
     p.add_argument('--size', type=int, default=512)
     p.add_argument('--device', default='auto')
     p.add_argument('--no-guided', dest='guided', action='store_false')
+    p.add_argument('--engine', choices=('unet', 'turbo'), default='unet')
     p.add_argument('--sensor', action='store_true')
     p = commands.add_parser('metrics')
     p.add_argument('names', nargs='+')
