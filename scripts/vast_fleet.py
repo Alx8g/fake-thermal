@@ -174,43 +174,56 @@ def destroy(label, box, reason):
 
 
 def watch(args):
+    """Keep watching through transient failures: a single failed vastai or ssh
+    call (a network blip on the watching machine) once killed the watcher and
+    would have left a finished box billing unattended."""
     destination = ROOT / args.into
     while True:
-        box = load(args.label)
-        if box.get('destroyed'):
-            print('box already destroyed', flush=True)
-            return
-        money = credit()
-        for arm, info in box['arms'].items():
-            if info['done']:
-                continue
-            log = remote(box, f'tail -n 2 ~/train_{arm}.log 2>/dev/null; '
-                              f'grep -c -E "FINISHED|Traceback" ~/train_{arm}.log 2>/dev/null',
-                         check=False, capture_output=True).stdout.strip().splitlines()
-            ended = bool(log) and log[-1].isdigit() and int(log[-1]) > 0
-            print(f'{time.strftime("%H:%M")} {arm}: {log[-2][:160] if len(log) > 1 else "(no log yet)"}',
-                  flush=True)
-            pull(box, arm, final=ended, destination=destination)
-            if ended:
-                info['done'] = True
-                save(args.label, box)
-                print(f'ARM ENDED {arm}', flush=True)
-        box = load(args.label)
-        everything_done = box['arms'] and all(i['done'] for i in box['arms'].values())
-        if money <= args.floor:
-            for arm in box['arms']:
-                pull(box, arm, final=True, destination=destination)
-            destroy(args.label, box, f'credit {money:.2f} reached floor {args.floor:.2f}')
-            return
-        if everything_done and not (STATE / f'{args.label}.hold').exists():
-            destroy(args.label, box, 'all arms finished')
-            return
-        if args.max_hours and time.time() - box['rented'] > args.max_hours * 3600:
-            for arm in box['arms']:
-                pull(box, arm, final=True, destination=destination)
-            destroy(args.label, box, f'max {args.max_hours}h reached')
-            return
+        try:
+            if watch_round(args, destination):
+                return
+        except Exception as error:  # noqa: BLE001 - any failure here must not end the watch
+            print(f'{time.strftime("%H:%M")} watch round failed, retrying: {error!r}', flush=True)
         time.sleep(args.every)
+
+
+def watch_round(args, destination):
+    """One pass over the box; True once the box is gone and watching is over."""
+    box = load(args.label)
+    if box.get('destroyed'):
+        print('box already destroyed', flush=True)
+        return True
+    money = credit()
+    for arm, info in box['arms'].items():
+        if info['done']:
+            continue
+        log = remote(box, f'tail -n 2 ~/train_{arm}.log 2>/dev/null; '
+                          f'grep -c -E "FINISHED|Traceback" ~/train_{arm}.log 2>/dev/null',
+                     check=False, capture_output=True).stdout.strip().splitlines()
+        ended = bool(log) and log[-1].isdigit() and int(log[-1]) > 0
+        print(f'{time.strftime("%H:%M")} {arm}: {log[-2][:160] if len(log) > 1 else "(no log yet)"}',
+              flush=True)
+        pull(box, arm, final=ended, destination=destination)
+        if ended:
+            info['done'] = True
+            save(args.label, box)
+            print(f'ARM ENDED {arm}', flush=True)
+    box = load(args.label)
+    everything_done = box['arms'] and all(i['done'] for i in box['arms'].values())
+    if money <= args.floor:
+        for arm in box['arms']:
+            pull(box, arm, final=True, destination=destination)
+        destroy(args.label, box, f'credit {money:.2f} reached floor {args.floor:.2f}')
+        return load(args.label).get('destroyed') is not None
+    if everything_done and not (STATE / f'{args.label}.hold').exists():
+        destroy(args.label, box, 'all arms finished')
+        return load(args.label).get('destroyed') is not None
+    if args.max_hours and time.time() - box['rented'] > args.max_hours * 3600:
+        for arm in box['arms']:
+            pull(box, arm, final=True, destination=destination)
+        destroy(args.label, box, f'max {args.max_hours}h reached')
+        return load(args.label).get('destroyed') is not None
+    return False
 
 
 def main():
