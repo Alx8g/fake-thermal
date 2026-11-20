@@ -103,11 +103,23 @@ def push(args):
                 f'git fetch -q origin && git checkout -q -B {branch} origin/{branch}; '
                 'pip install -q --no-deps -e . && pip install -q lpips opencv-python-headless tqdm '
                 '2>&1 | grep -v "already satisfied" | tail -n 3; mkdir -p ~/data512')
+    # One stream through Vast's ssh relay tops out near 3 MB/s; several parallel
+    # rsyncs reached ~11 MB/s. rsync also avoids macOS tar's ._ metadata files.
     started = time.time()
-    tar = subprocess.Popen(['tar', '-C', str(ROOT / args.data), '-cf', '-', 'pairs', 'manifest.json'],
-                           stdout=subprocess.PIPE)
-    subprocess.run([*ssh_args(box), 'tar -C ~/data512 -xf -'], stdin=tar.stdout, check=True)
-    tar.wait()
+    data = ROOT / args.data
+    files = sorted(str(p.relative_to(data)) for p in (data / 'pairs').rglob('*')
+                   if p.is_file() and not p.name.startswith('._'))
+    files.append('manifest.json')
+    lists = []
+    for n in range(args.streams):
+        path = STATE / f'{args.label}.files.{n}'
+        path.write_text(chr(10).join(files[n::args.streams]) + chr(10))
+        lists.append(path)
+    ssh = ' '.join(shlex.quote(a) for a in ssh_args(box)[:-1])
+    streams = [subprocess.Popen(['rsync', '-a', f'--files-from={path}', '-e', ssh, './',
+                                 f"{ssh_args(box)[-1]}:data512/"], cwd=data) for path in lists]
+    if any(stream.wait() for stream in streams):
+        sys.exit('a data stream failed; rerun push (rsync resumes where it stopped)')
     print(f'data pushed in {time.time() - started:.0f}s', flush=True)
     remote(box, 'ls ~/data512/pairs/train/rgb | wc -l; du -sh ~/data512')
 
@@ -120,9 +132,10 @@ def launch(args):
            f'origin/{args.branch} && python {script} --output outputs/{args.arm} {extra} '
            f'> ~/train_{args.arm}.log 2>&1')
     if args.after:
-        # chain behind another arm on the same box: start once it has ended
-        run = (f'while ! grep -q -E "FINISHED|Traceback" ~/train_{args.after}.log 2>/dev/null; '
-               f'do sleep 30; done; {run}')
+        # chain behind other arms on the same box: start once every one has ended
+        waits = ' '.join(f'while ! grep -q -E "FINISHED|Traceback" ~/train_{arm}.log 2>/dev/null; '
+                         f'do sleep 30; done;' for arm in args.after.split(','))
+        run = f'{waits} {run}'
     remote(box, f'nohup sh -c {shlex.quote(run)} > /dev/null 2>&1 &')
     box['arms'][args.arm] = {'launched': time.time(), 'done': False, 'after': args.after}
     save(args.label, box)
@@ -211,11 +224,12 @@ def main():
     p = commands.add_parser('push')
     p.add_argument('--label', required=True)
     p.add_argument('--data', default='data512')
+    p.add_argument('--streams', type=int, default=6)
     p.add_argument('--branch', default='feat/realism-campaign')
     p = commands.add_parser('launch')
     p.add_argument('--label', required=True)
     p.add_argument('--arm', required=True)
-    p.add_argument('--after', help='start only when this arm on the same box has ended')
+    p.add_argument('--after', help='comma-separated arms on the same box that must end first')
     p.add_argument('--script', help='training command instead of scripts/train.py (args before --output)')
     p.add_argument('--branch', default='feat/realism-campaign')
     p.add_argument('train_args', nargs=argparse.REMAINDER)
