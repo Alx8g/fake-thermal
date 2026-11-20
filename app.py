@@ -8,14 +8,14 @@ os.environ.setdefault('PYTORCH_ENABLE_MPS_FALLBACK', '1')
 import gradio as gr
 from PIL import Image
 
-from fake_thermal.infer import PALETTES, convert
+from fake_thermal.infer import ENGINES, PALETTES, convert
 from fake_thermal.device import DEVICES
 
 ROOT = Path(__file__).resolve().parent
 
 
 def run_media(upload, palette, side_by_side, smoothing, raw, semantic, semantic_strength,
-              device, auto_contrast, flow, sensor,
+              device, auto_contrast, flow, sensor, engine='unet',
               progress=gr.Progress(track_tqdm=True)):
     if not upload:
         raise gr.Error('Upload an image or video first.')
@@ -29,9 +29,10 @@ def run_media(upload, palette, side_by_side, smoothing, raw, semantic, semantic_
     output = directory / ('thermal.png' if is_image else 'thermal.mp4')
     try:
         result = convert(upload, output, palette=palette, side_by_side=side_by_side,
+                         size=512 if engine == 'turbo' else 384,
                          smoothing=smoothing, raw=raw, threads=2, semantic=semantic,
                          semantic_strength=semantic_strength, device=device,
-                         auto_contrast=auto_contrast, flow=flow, sensor=sensor)
+                         auto_contrast=auto_contrast, flow=flow, sensor=sensor, engine=engine)
     except Exception as error:
         raise gr.Error(str(error)) from error
     downloads = [str(output)] + ([result['raw']] if result['raw'] else [])
@@ -44,6 +45,8 @@ with gr.Blocks(title='fake-thermal') as app:
     gr.Markdown('# fake-thermal\nTurn RGB clips and photos into a thermal-camera look. '
                 '**AI-generated relative heat, not measured temperatures.**')
     upload = gr.File(label='Drop a video or image', file_types=['video', 'image'], type='filepath')
+    engine = gr.Radio(list(ENGINES), value='unet', label='Engine',
+                      info='unet: fast. turbo: far more photographic, ~2 s per frame on an M1 Pro')
     with gr.Row():
         palette = gr.Dropdown(list(PALETTES), value='ironbow', label='Palette')
         side = gr.Checkbox(label='RGB | thermal side by side')
@@ -63,8 +66,11 @@ with gr.Blocks(title='fake-thermal') as app:
     video = gr.Video(label='Video preview')
     image = gr.Image(label='Image preview', type='filepath')
     files = gr.File(label='Download results', file_count='multiple')
+    # turbo synthesizes its own sensor texture and heat structure
+    engine.change(lambda choice: (gr.update(value=choice == 'unet'), gr.update(value=choice == 'unet')),
+                  engine, [sensor, semantic])
     button.click(run_media, [upload, palette, side, smoothing, raw, semantic, semantic_strength,
-                             device, auto_contrast, flow, sensor],
+                             device, auto_contrast, flow, sensor, engine],
                  [video, image, files, status], concurrency_limit=1)
 
 
