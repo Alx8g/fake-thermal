@@ -47,6 +47,9 @@ Held-out metrics (300 frames, RGB-covered region, 12 px margin):
 | turbo5k + people prior | semantic prior, people/animals only, strength .7 | 48 | 0.292 |
 | turbo2 | turbo5k + 6k more steps | 40 | 0.281 |
 | turbo2 + people prior | | 39 | 0.283 |
+| turbo2 + people prior, edges fitted to the photo | (shipped) | 39 | 0.283 |
+| turbo3 | turbo2 + 4k steps with an RGB-conditioned PatchGAN critic (0.5) | 46 | 0.279 |
+| turbo3 + fitted people prior | | 45 | 0.280 |
 
 Blind side-by-side (fake spotted, 24 frames per model; 100% = always caught):
 
@@ -55,6 +58,7 @@ Blind side-by-side (fake spotted, 24 frames per model; 100% = always caught):
 | r1 | v3, lpips100, gan010, gan050 (no sensor sim) | all 100% |
 | r2 | v3+sensor, gan050+sensor, turbo 4k | all 100% (flawed: judges recognised a repeated real panel) |
 | r3 (Latin square, each judge sees each frame once) | turbo5k / turbo2 / turbo2 + people prior | 95.8% / 91.7% / **87.5%** |
+| r4 (36 frames per model) | turbo2 + fitted prior / turbo3 + fitted prior | **83.3%** (KAIST 6/12) / 91.7% (KAIST 9/12) |
 
 Blind single frame (called generated, 18 frames per model; real frames are the baseline):
 
@@ -62,6 +66,7 @@ Blind single frame (called generated, 18 frames per model; real frames are the b
 | --- | --- | --- |
 | s1 | 22% | turbo 4k 33%, gan050+sensor 83%, v3+sensor 100% |
 | s2 (stricter judges) | 22% | turbo2 + people prior 61%, turbo5k 67%, turbo2 72% |
+| s3 (30 frames per class) | 30% | turbo3 + fitted prior 57%, turbo2 + fitted prior 63% |
 
 With 18-24 frames per cell the uncertainty is about +-20 points; the
 direction is consistent across rounds.
@@ -101,18 +106,30 @@ because it turned parked cars into hot blobs. Inference on an M1 Pro: about
 - The dataset was pushed three times from the Mac over a single tar/rsync
   stream each (~45 min with three GPUs billing).
 
+## What shipped (20 Nov)
+
+- Turbo engine: `turbo2` weights with the people-and-animals semantic prior
+  (strength .7, edges fitted to the photo), no sensor simulation. turbo2 and
+  turbo3 are statistically tied in the blind tests (2-3 frames apart); turbo2
+  won side by side and on KID, and its recipe is simpler, so it ships. The
+  RGB-conditioned critic in turbo3 did not visibly reduce copied light sources.
+- U-Net engine: `gan050` (best U-Net on single frames).
+- Tried and dropped: scaling turbo's VAE skips at inference (worse on both
+  metrics, no visible change), compressing photo highlights before translation
+  (no visible change to lamp glow), and the vehicle part of the semantic prior
+  for turbo (parked cars became hot blobs).
+
 ## Cost
 
-Vast credit: $10.00 at the start of the cloud work. Spent by the morning sweep
-(three 4090 arms, one lost): about $2.70. Spent since (one 4090, two
-adversarial runs in parallel, pix2pix-Turbo): see the in-flight section.
+Vast credit: $10.00 at the start of the cloud work, $3.72 at the end.
 
-## In flight
-
-- `turbo` (5,000 steps, batch 2, lr 1e-5) then `turbo2` (6,000 more steps from
-  turbo's final weights), on one rented 4090 (Vietnam, $0.37/h). The box is
-  watched by `scripts/vast_fleet.py watch` with a $0.60 credit floor and a
-  5-hour cap.
+- Morning sweep (three 4090 arms, one lost; previous agent): about $2.70,
+  including about 40 minutes of idle billing after the arms finished because
+  no watcher existed.
+- Afternoon, one 4090 (Vietnam, $0.37/h, 12:30-18:37): two adversarial U-Net
+  runs in parallel (35 min), pix2pix-Turbo 5k, 6k and 4k steps, and the
+  held-out renders: about $2.30, plus the second idle box at the start.
+- The box was destroyed by the watcher as soon as its last run ended.
 
 ## Earlier entries (previous agent, 19-20 Nov)
 

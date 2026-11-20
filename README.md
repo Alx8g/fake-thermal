@@ -1,7 +1,9 @@
 # fake-thermal
 
-Turn RGB videos and photos into a synthetic thermal-camera look, using a
-CPU-friendly ResNet18 U-Net trained on paired RGB/thermal images.
+Turn RGB videos and photos into a synthetic thermal-camera look. Two engines:
+a fast, CPU-friendly ResNet18 U-Net (default), and `--engine turbo`, a
+one-step SD-Turbo model fine-tuned on paired RGB/thermal footage that is far
+more photographic and much slower.
 
 Premiere Pro and DaVinci Resolve plugins are planned; this version provides
 the CLI and web UI only.
@@ -10,9 +12,10 @@ the CLI and web UI only.
 recover real thermal information from phone RGB sensors. Colors are relative
 predicted intensity, not Celsius/Fahrenheit. Predictions may be wrong: do not
 use them for medical, safety, surveillance decisions, or temperature measurement.
-The bundled weights are the best checkpoint of a 30,000-iteration run
-(validation L1 0.1696, a third below the semantic-prior-only baseline);
-outputs are plausible thermal appearance, not thermometry.
+In blind tests, judges shown a turbo frame next to the real thermal frame of
+the same scene picked the real one 83% of the time (50%, chance, on KAIST
+street scenes); the U-Net is spotted every time. Outputs are plausible thermal
+appearance, not thermometry. Measurements: [experiment log](docs/EXPERIMENTS.md).
 
 ## Demo
 
@@ -188,9 +191,9 @@ data.** They are not MIT-licensed. Upstream terms still apply; this notice does
 not grant rights beyond those terms, and unrestricted redistribution or
 commercial use is not established. Verify upstream permissions for your use.
 
-The bundled weights are the best checkpoint (iteration 17,500 of a 30,000-iteration
-M1 Pro MPS run, validation L1 0.169593, ~8% below the previous CPU-run export
-at iteration 3,500). See [weights notice](fake_thermal/weights/README.md).
+Bundled weights: `fake_thermal.pt` (U-Net engine, adversarially fine-tuned)
+and `turbo.pt` (turbo engine LoRA weights; SD-Turbo is downloaded separately
+under its own licence). See [weights notice](fake_thermal/weights/README.md).
 
 ## Tests
 
