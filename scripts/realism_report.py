@@ -39,7 +39,7 @@ def stretch8(image):
     return (normalize_thermal(image) * 255).round().astype(np.uint8)
 
 
-def rgb_box(rgb, threshold=20, margin=4):
+def rgb_box(rgb, threshold=20, margin=12):
     """Bounding box of the part of the frame the RGB camera actually covers.
     FLIR's aligned RGB leaves ~30/65 px black bands top/bottom and ~80 px at the
     sides; the thermal there has no RGB counterpart, so it is excluded."""
@@ -92,7 +92,7 @@ def generate(args):
     from fake_thermal.semantic import guided_upsample
     from fake_thermal.sensor import ThermalSensor
     if args.engine == 'turbo':
-        predictor = TurboPredictor(args.weights, size=args.size, device=args.device)
+        predictor = TurboPredictor(args.weights, size=args.size, device=args.device, skip=args.skip)
         args.guided = False
     else:
         predictor = Predictor(weights=args.weights, size=args.size, device=args.device, threads=4)
@@ -173,10 +173,18 @@ def pairs(args):
     out = ROOT / 'blind' / args.round
     sheets = out / 'sheets'
     sheets.mkdir(parents=True, exist_ok=True)
-    trials = [(name, stem) for name in args.names for stem in stems]
+    # Latin square: judge j sees frame i rendered by model (i + j) mod M, so no
+    # judge sees the same scene twice (a repeated real panel gives the answer
+    # away) and every judge sees every model equally often.
+    judges = len(args.names)
+    trials = [(name, stem, (index + m) % judges) for index, stem in enumerate(stems)
+              for m, name in enumerate(args.names)]
     rng.shuffle(trials)
+    trials.sort(key=lambda trial: trial[2])
+    assignment = {}
     key = []
-    for number, (name, stem) in enumerate(trials, 1):
+    for number, (name, stem, judge) in enumerate(trials, 1):
+        assignment.setdefault(f'judge{judge + 1}', []).append(f'{number:03d}')
         real = load_gray(ROOT / 'real' / f'{stem}.png')
         fake = crop_to_rgb(stem, load_gray(ROOT / 'fake' / name / f'{stem}.png', real.shape[::-1]), args.data)
         real = crop_to_rgb(stem, real, args.data)
@@ -193,7 +201,9 @@ def pairs(args):
         key.append({'sheet': f'{number:03d}', 'model': name, 'frame': stem,
                     'real': 'A' if real_left else 'B'})
     (out / 'key.json').write_text(json.dumps(key, indent=2) + '\n')
-    print(f'wrote {len(key)} blind sheets to {sheets}; key in {out / "key.json"}')
+    (out / 'judges.json').write_text(json.dumps(assignment, indent=2) + '\n')
+    print(f'wrote {len(key)} blind sheets to {sheets} for {judges} judges '
+          f'(judges.json); key in {out / "key.json"}')
 
 
 def singles(args):
@@ -289,6 +299,7 @@ def main():
     p.add_argument('--device', default='auto')
     p.add_argument('--no-guided', dest='guided', action='store_false')
     p.add_argument('--engine', choices=('unet', 'turbo'), default='unet')
+    p.add_argument('--skip', type=float, default=1., help='turbo skip-connection strength')
     p.add_argument('--sensor', action='store_true')
     p = commands.add_parser('metrics')
     p.add_argument('names', nargs='+')

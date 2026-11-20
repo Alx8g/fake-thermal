@@ -158,14 +158,20 @@ class Pix2PixTurbo(nn.Module):
         temporary.replace(path)
 
     @torch.no_grad()
-    def translate(self, rgb, dtype=None):
-        """HxWx3 uint8 RGB to an HxW thermal map in [0, 1] (any frame size)."""
+    def translate(self, rgb, dtype=None, skip=1.):
+        """HxWx3 uint8 RGB to an HxW thermal map in [0, 1] (any frame size).
+        ``skip`` scales the encoder-to-decoder skip activations: below 1 it
+        passes less fine RGB structure (paint, glare, glass) into the output."""
         import numpy as np
         from torch.nn import functional as F
         h, w = rgb.shape[:2]
         x = torch.from_numpy(np.ascontiguousarray(rgb)).permute(2, 0, 1)[None].float().div(255)
         x = x.to(self.device_name)
         x = F.pad(x, (0, (-w) % 64, 0, (-h) % 64), mode='replicate')
-        with torch.autocast(self.device_name.type, dtype=dtype or torch.float16, enabled=dtype is not None):
-            y = self.forward(x).float()
+        self.vae.decoder.gamma = skip
+        try:
+            with torch.autocast(self.device_name.type, dtype=dtype or torch.float16, enabled=dtype is not None):
+                y = self.forward(x).float()
+        finally:
+            self.vae.decoder.gamma = 1
         return ((y[0].mean(0)[:h, :w] + 1) / 2).clamp(0, 1).cpu().numpy()
