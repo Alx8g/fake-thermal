@@ -34,13 +34,37 @@ Luna verdicts given with labelled panels and the expected answer in the prompt.
 
 ## Results, 20 Nov 2026 (lower is better everywhere)
 
-| Model | Recipe | Side-by-side fake spotted | KID x1000 | DISTS |
-| --- | --- | --- | --- | --- |
-| v3 (+sensor sim, as shipped in PR #2) | L1/SSIM/FFL, 512px data | 100% (no sensor: 24/24) | 195 (170) | 0.380 (0.440) |
-| lpips100 | v3 recipe + LPIPS 1.0, 20k | 100% (24/24) | 103 | 0.329 |
-| gan010 | lpips100 + full-res path + PatchGAN 0.1, FM 10, 8k | 100% (24/24) | 123 (sensor: 107) | 0.318 (sensor: 0.373) |
-| gan050 | same, PatchGAN 0.5 | 100% (24/24) | 141 (sensor: 111) | 0.317 (sensor: 0.362) |
-| turbo | pix2pix-Turbo (SD-Turbo LoRA), 5k steps | pending | pending | pending |
+Held-out metrics (300 frames, RGB-covered region, 12 px margin):
+
+| Model | Recipe | KID x1000 | DISTS |
+| --- | --- | --- | --- |
+| v3 (as shipped in PR #2), +sensor sim | L1/SSIM/FFL, 512px data | 195 (170) | 0.380 (0.440) |
+| lpips100 | v3 recipe + LPIPS 1.0, 20k | 101 | 0.332 |
+| gan010, +sensor | lpips100 + full-res path + PatchGAN 0.1, FM 10, 8k | 123 (107) | 0.318 (0.373) |
+| gan050, +sensor | same, PatchGAN 0.5 | 141 (104) | 0.317 (0.367) |
+| turbo5k | pix2pix-Turbo (SD-Turbo LoRA), 5k steps, batch 2 | 50 | 0.291 |
+| turbo5k, skip 0.7 | same, VAE skips scaled to 0.7 at inference | 55 | 0.319 |
+| turbo5k + people prior | semantic prior, people/animals only, strength .7 | 48 | 0.292 |
+| turbo2 | turbo5k + 6k more steps | 40 | 0.281 |
+| turbo2 + people prior | | 39 | 0.283 |
+
+Blind side-by-side (fake spotted, 24 frames per model; 100% = always caught):
+
+| Round | Models | Result |
+| --- | --- | --- |
+| r1 | v3, lpips100, gan010, gan050 (no sensor sim) | all 100% |
+| r2 | v3+sensor, gan050+sensor, turbo 4k | all 100% (flawed: judges recognised a repeated real panel) |
+| r3 (Latin square, each judge sees each frame once) | turbo5k / turbo2 / turbo2 + people prior | 95.8% / 91.7% / **87.5%** |
+
+Blind single frame (called generated, 18 frames per model; real frames are the baseline):
+
+| Round | Real | Models |
+| --- | --- | --- |
+| s1 | 22% | turbo 4k 33%, gan050+sensor 83%, v3+sensor 100% |
+| s2 (stricter judges) | 22% | turbo2 + people prior 61%, turbo5k 67%, turbo2 72% |
+
+With 18-24 frames per cell the uncertainty is about +-20 points; the
+direction is consistent across rounds.
 
 Judges' reasons for the U-Net models, consistently: smeared and blobby heat,
 no sensor grain or vignette, and (before the crop fix) a border on FLIR frames.
@@ -50,11 +74,16 @@ The adversarial runs add thermal-like texture (vegetation glow, palm trunks,
 darker sky) and improve DISTS, but worsen KID; sensor simulation does the
 opposite. Neither closes the gap.
 
-pix2pix-Turbo at 1,250 steps already rendered crisp trees, cars, cyclists and
-pedestrians with real thermal texture on KAIST and LLVIP; dark FLIR night
-frames remained weak, and on out-of-domain footage it still partly copied RGB
-brightness (a light suit glowed, a dark suit read cold). Inference on an M1
-Pro: ~0.54 frames/s at a 512 working short side.
+pix2pix-Turbo is the first model that fools judges at all. Its remaining
+tells, in order of frequency: visible light sources glowing (street lamps,
+lit windows, traffic signals, headlight glare and light pools on the road),
+see-through windscreens (glass is opaque in LWIR), people whose heat follows
+clothing brightness instead of reading uniformly hot, copied road paint and
+logos, and a faint blotchy/grid texture. Dark FLIR night frames, where the RGB
+carries almost no information, remain its weakest source. The people prior
+fixes the commonest people tell; the vehicle part of the prior is excluded
+because it turned parked cars into hot blobs. Inference on an M1 Pro: about
+1.6-1.9 s per frame at a 512 working short side.
 
 ## Corrections to the earlier record (19-20 Nov)
 
