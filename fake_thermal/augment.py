@@ -107,12 +107,15 @@ def _windows(shape):
         for c in range(cols):
             if random.random() < .65:
                 x, y = left + c * gx, top + r * gy
-                draw.rectangle([x, y, x + ww, y + wh], fill=int(255 * random.uniform(.5, 1.)))
-    m = np.asarray(mask, np.float32) / 255
+                draw.rectangle([x, y, x + ww, y + wh], fill=int(255 * random.uniform(.3, 1.)))
+    soft = mask.filter(ImageFilter.GaussianBlur(random.uniform(.6, 1.6)))
+    m = np.asarray(soft, np.float32) / 255
+    # light falls off from the top of each pane, like a lamp behind a curtain
+    m = m * (1 - random.uniform(0, .35) * ((np.arange(h, dtype=np.float32)[:, None] - top) % gy / gy))
     colour = _jitter(random.choice(WINDOW_COLOURS))
     if random.random() < .5:
         m = np.maximum(m, np.asarray(mask.filter(ImageFilter.GaussianBlur(ww * .6)), np.float32) / 255 * .35)
-    return m[..., None] * random.uniform(.55, .95) * colour
+    return m[..., None] * random.uniform(.5, .9) * colour
 
 
 def add_print(rgb):
@@ -153,7 +156,8 @@ def darken(rgb):
 
 def photo_only(rgb, p_light=0., p_print=0., p_dark=0.):
     """Apply the augmentations to a float RGB crop; lights are likelier after darkening."""
-    dark = random.random() < p_dark
+    # only darken photos that are not already night shots: those are dark enough
+    dark = random.random() < p_dark and float(rgb.mean()) > .3
     if dark:
         rgb = darken(rgb)
     if random.random() < (min(1., p_light * 1.8) if dark else p_light):

@@ -10,3 +10,4 @@ train_mac.log
 !fake_thermal/weights/turbo.pt
 *.egg-info/
 build/
+.working/
