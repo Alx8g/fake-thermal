@@ -146,8 +146,8 @@ def pull(box, arm, final, destination):
     target = destination / arm
     target.mkdir(parents=True, exist_ok=True)
     ssh = ' '.join(shlex.quote(a) for a in ssh_args(box)[:-1])
-    include = ['--include=snapshots/***', '--include=val_*.jpg', '--include=config.json',
-               '--include=val_ids.json']
+    include = ['--include=snapshots/***', '--include=fake/***', '--include=val_*.jpg',
+               '--include=config.json', '--include=val_ids.json']
     if final:
         include += ['--include=ckpt/', '--include=ckpt/last.pt', '--include=ckpt/best.pt']
     subprocess.run(['rsync', '-a', '-e', ssh, *include, '--exclude=*',
