@@ -51,11 +51,11 @@ def fuse_heat(model, prior, confidence, strength=.7):
 
 
 class SemanticPrior:
-    def __init__(self, size=320, device='auto', emissive=True, vehicles=True):
+    def __init__(self, size=320, device='auto', emissive=True, vehicles=True, sharp=False):
         """``emissive=False`` drops the colour heuristic for flames and lights;
         ``vehicles=False`` drops vehicle classes (parked cars read cold in real
         thermal), leaving people and animals."""
-        self.size, self.emissive, self.vehicles = size, emissive, vehicles
+        self.size, self.emissive, self.vehicles, self.sharp = size, emissive, vehicles, sharp
         self.device = select_device(device)
         self.weights = DeepLabV3_MobileNet_V3_Large_Weights.DEFAULT
         self.model = None
@@ -83,6 +83,12 @@ class SemanticPrior:
                           out=np.zeros_like(prior), where=total > 0)
         confidence = np.maximum(confidence, emissive_confidence)
         target = (output_shape[1], output_shape[0])
+        if self.sharp:
+            # The class map comes from a 320px segmentation; stretched bilinearly it
+            # gives people a soft, flame-like glow. Re-fit its edges to the photo.
+            guide = cv2.resize(rgb, target, interpolation=cv2.INTER_AREA)
+            return (cv2.resize(prior, target, interpolation=cv2.INTER_LINEAR),
+                    guided_upsample(confidence, guide, radius=2, epsilon=1e-3))
         return (cv2.resize(prior, target, interpolation=cv2.INTER_LINEAR),
                 cv2.resize(confidence, target, interpolation=cv2.INTER_LINEAR))
 

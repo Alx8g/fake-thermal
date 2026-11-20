@@ -96,8 +96,8 @@ def generate(args):
         args.guided = False
     else:
         predictor = Predictor(weights=args.weights, size=args.size, device=args.device, threads=4)
-    prior = (SemanticPrior(device=args.device, emissive=args.emissive, vehicles=args.vehicles)
-             if args.semantic else None)
+    prior = (SemanticPrior(device=args.device, emissive=args.emissive, vehicles=args.vehicles,
+                           sharp=args.sharp_prior) if args.semantic else None)
     out = ROOT / 'fake' / args.name
     out.mkdir(parents=True, exist_ok=True)
     for i, stem in enumerate(test_ids()):
@@ -309,6 +309,7 @@ def main():
                    help='drop the flame/light colour heuristic from the semantic prior')
     p.add_argument('--no-vehicles', dest='vehicles', action='store_false',
                    help='semantic prior for people and animals only')
+    p.add_argument('--sharp-prior', action='store_true', help='fit the prior edges to the photo')
     p.add_argument('--sensor', action='store_true')
     p = commands.add_parser('metrics')
     p.add_argument('names', nargs='+')
