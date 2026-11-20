@@ -119,27 +119,29 @@ def metrics(args):
     from torchmetrics.image.kid import KernelInceptionDistance
     import piq
     torch.manual_seed(0)
+    device = torch.device('cuda' if torch.cuda.is_available() else
+                          'mps' if torch.backends.mps.is_available() else 'cpu')
     stems = test_ids()
     full = {s: load_gray(ROOT / 'real' / f'{s}.png') for s in stems}
     real = {s: crop_to_rgb(s, full[s], args.data) for s in stems}
     results = {}
-    dists = piq.DISTS(reduction='none')
+    dists = piq.DISTS(reduction='none').to(device)
     for name in args.names:
         folder = ROOT / 'fake' / name
         fake = {s: crop_to_rgb(s, load_gray(folder / f'{s}.png', full[s].shape[::-1]), args.data)
                 for s in stems}
-        kid = KernelInceptionDistance(subset_size=min(100, len(stems)), subsets=50)
+        kid = KernelInceptionDistance(subset_size=min(100, len(stems)), subsets=50).to(device)
         square = lambda a: np.asarray(Image.fromarray(a).resize((299, 299), Image.BICUBIC))
         as_rgb = lambda frames: torch.from_numpy(np.stack([square(f) for f in frames])).unsqueeze(1).repeat(1, 3, 1, 1)
         for start in range(0, len(stems), 32):
             chunk = stems[start:start + 32]
-            kid.update(as_rgb([real[s] for s in chunk]), real=True)
-            kid.update(as_rgb([fake[s] for s in chunk]), real=False)
+            kid.update(as_rgb([real[s] for s in chunk]).to(device), real=True)
+            kid.update(as_rgb([fake[s] for s in chunk]).to(device), real=False)
         kid_mean, kid_std = kid.compute()
         scores = {}
         with torch.no_grad():
             for s in stems:
-                to_tensor = lambda a: torch.from_numpy(a).float().div(255)[None, None].repeat(1, 3, 1, 1)
+                to_tensor = lambda a: torch.from_numpy(a).float().div(255)[None, None].repeat(1, 3, 1, 1).to(device)
                 scores[s] = float(dists(to_tensor(fake[s]), to_tensor(real[s]))[0])
         by_source = {}
         for s, value in scores.items():
