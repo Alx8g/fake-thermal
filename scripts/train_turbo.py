@@ -76,10 +76,20 @@ def stretch8(heat):
     return (normalize_thermal(heat) * 255).round().astype(np.uint8)
 
 
+def amp_dtype(device):
+    """bf16 autocast on CUDA; MPS lacks bf16 kernels for some ops, so fp32 there."""
+    return torch.bfloat16 if device.type == 'cuda' else None
+
+
+def autocast(device):
+    dtype = amp_dtype(device)
+    return torch.autocast(device.type, dtype=dtype or torch.float16, enabled=dtype is not None)
+
+
 def save_grid(net, batch, path):
     rgb, target, _ = batch
     net.set_eval()
-    with torch.no_grad(), torch.autocast(net.device_name.type, dtype=torch.bfloat16):
+    with torch.no_grad(), autocast(net.device_name):
         pred = net(rgb.to(net.device_name)).float().cpu()
     tiles = []
     for i in range(len(rgb)):
@@ -114,7 +124,7 @@ def generate(net, args):
     for stem in stems:
         with Image.open(Path(args.data) / f'pairs/val/rgb/{stem}.jpg') as im:
             rgb = np.asarray(im.convert('RGB'))
-        heat = net.translate(rgb, dtype=torch.bfloat16)
+        heat = net.translate(rgb, dtype=amp_dtype(net.device_name))
         Image.fromarray(stretch8(heat)).save(out / f'{stem}.png')
     print(f'GENERATED {len(stems)} held-out frames to {out}', flush=True)
 
@@ -185,7 +195,7 @@ def main():
         rgb, target, _ = next(batches)
         rgb, target = rgb.to(device, non_blocking=True), target.to(device, non_blocking=True)
         net.set_train()
-        with torch.autocast(device.type, dtype=torch.bfloat16):
+        with autocast(device):
             pred = net(rgb)
             l2 = F.mse_loss(pred.float(), target)
             lp = perceptual(pred.float(), target).mean()
@@ -202,7 +212,7 @@ def main():
 
         disc.requires_grad_(True)
         disc.cv_ensemble.requires_grad_(False)
-        with torch.autocast(device.type, dtype=torch.bfloat16):
+        with autocast(device):
             d_real = disc(target, for_real=True).mean()
             d_fake = disc(pred.detach(), for_real=False).mean()
         d_loss = args.lambda_gan * (d_real + d_fake).float()
