@@ -9,7 +9,8 @@ import torch
 
 from fake_thermal.infer import convert
 from fake_thermal.semantic import (
-    CLASS_HEAT, SemanticPrior, emissive_prior, fuse_heat, guided_upsample, probability_prior,
+    CLASS_HEAT, PART_HEAT, PartSegmenter, SemanticPrior, emissive_prior, fuse_heat, guided_upsample,
+    part_prior, probability_prior,
 )
 
 
@@ -91,6 +92,43 @@ class SemanticTests(unittest.TestCase):
             factory.assert_called_once_with(weights=semantic.weights)
             factory.return_value.eval.return_value.to.assert_called_once_with(
                 device=torch.device('cpu'), dtype=torch.float32)
+
+    def test_part_prior_levels(self):
+        masks = np.zeros((3, 4, 6), np.float32)
+        masks[0, :, 3] = 1  # face skin
+        masks[1, :, 4] = 1  # clothes
+        masks[2, :, 0] = 1  # background
+        target, person = part_prior(masks)
+        np.testing.assert_allclose(target[0], PART_HEAT[3])
+        np.testing.assert_allclose(target[1], PART_HEAT[4])
+        np.testing.assert_allclose(target[2], CLASS_HEAT['person'])
+        np.testing.assert_allclose(person, [[1] * 4, [1] * 4, [0] * 4])
+        self.assertGreater(PART_HEAT[3], PART_HEAT[4])
+        self.assertGreater(PART_HEAT[4], PART_HEAT[1])
+
+    def test_part_segmenter_resolves_large_people_only(self):
+        person = np.zeros((40, 40), np.float32)
+        person[4:36, 4:16] = 1   # tall: resolved by parts
+        person[30:34, 30:33] = 1  # distant: left to the class prior
+        segmenter = PartSegmenter(min_height=.2)
+        segmenter.segmenter = object()
+        crops = []
+
+        def face(crop):
+            crops.append(crop.shape)
+            masks = np.zeros((*crop.shape[:2], 6), np.float32)
+            masks[..., 3] = 1
+            return masks
+
+        with patch.object(segmenter, 'segment', side_effect=face):
+            target, seen, cover = segmenter(np.zeros((80, 80, 3), np.uint8), person, (40, 40))
+        self.assertEqual(len(crops), 1)
+        self.assertAlmostEqual(float(target[20, 10]), PART_HEAT[3], places=5)
+        self.assertEqual(float(cover[20, 10]), 1.)
+        self.assertEqual(float(cover[32, 31]), 0.)
+        with patch.object(segmenter, 'segment', side_effect=lambda crop: np.eye(6, dtype=np.float32)[
+                np.zeros(crop.shape[:2], int)]):
+            self.assertIsNone(segmenter(np.zeros((80, 80, 3), np.uint8), person, (40, 40)))
 
     def test_convert_controls_without_network(self):
         with tempfile.TemporaryDirectory() as directory:

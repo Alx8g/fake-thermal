@@ -281,8 +281,10 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
     # With turbo the prior only warms people and animals: its vehicle classes made
     # parked cars glow and its colour heuristic made lit lamps glow, both tells.
     unet = engine == 'unet'
+    # With turbo, people large enough to segment get skin/clothing/hair levels
+    # instead of one uniform heat, which made whole suits glow like faces.
     semantic_predictor = (SemanticPrior(device=selected_device.type, emissive=unet, vehicles=unet,
-                                        sharp=not unet)
+                                        sharp=not unet, parts=not unet)
                           if semantic and semantic_strength > 0 else None)
     normalizer = DisplayNormalizer() if auto_contrast else None
 

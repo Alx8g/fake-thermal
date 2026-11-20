@@ -97,7 +97,7 @@ def generate(args):
     else:
         predictor = Predictor(weights=args.weights, size=args.size, device=args.device, threads=4)
     prior = (SemanticPrior(device=args.device, emissive=args.emissive, vehicles=args.vehicles,
-                           sharp=args.sharp_prior) if args.semantic else None)
+                           sharp=args.sharp_prior, parts=args.parts_prior) if args.semantic else None)
     out = ROOT / 'fake' / args.name
     out.mkdir(parents=True, exist_ok=True)
     for i, stem in enumerate(test_ids()):
@@ -310,6 +310,8 @@ def main():
     p.add_argument('--no-vehicles', dest='vehicles', action='store_false',
                    help='semantic prior for people and animals only')
     p.add_argument('--sharp-prior', action='store_true', help='fit the prior edges to the photo')
+    p.add_argument('--parts-prior', action='store_true',
+                   help='skin, clothing and hair heat for people large enough to segment (needs mediapipe)')
     p.add_argument('--sensor', action='store_true')
     p = commands.add_parser('metrics')
     p.add_argument('names', nargs='+')
