@@ -66,6 +66,13 @@ vertical clip went from 2.79 to 2.53 s per frame. `--stride 2` (model on every
 second frame, heat carried along the optical flow in between) gives 1.31 s per
 frame; carried frames ghost on fast hand movements, so it stays opt-in.
 
+**Tried and dropped: inpainting heat over visible lights.** Blown highlights
+(value above .95, blobs under 1% of the frame, people excluded) were dilated and
+their heat replaced from the surroundings with OpenCV inpainting. It left
+dark speckled blotches, caught burned-in captions and white objects, and
+missed ceiling LEDs in flat, low-contrast footage, which never fully blow
+out. Lights are left to the training-side augmentation.
+
 **turbo4 (running).** turbo2 plus 24k steps on one rented 4090 (Texas,
 $0.375/h), with photo-only augmentations (`fake_thermal/augment.py`): synthetic
 lamps, headlight pairs, rows of street lights, lit windows, light pools,

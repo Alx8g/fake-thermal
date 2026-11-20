@@ -46,7 +46,7 @@ with gr.Blocks(title='fake-thermal') as app:
                 '**AI-generated relative heat, not measured temperatures.**')
     upload = gr.File(label='Drop a video or image', file_types=['video', 'image'], type='filepath')
     engine = gr.Radio(list(ENGINES), value='unet', label='Engine',
-                      info='unet: fast. turbo: far more photographic, ~2 s per frame on an M1 Pro')
+                      info='unet: fast. turbo: far more photographic, ~2.5 s per vertical frame on an M1 Pro')
     with gr.Row():
         palette = gr.Dropdown(list(PALETTES), value='ironbow', label='Palette')
         side = gr.Checkbox(label='RGB | thermal side by side')
