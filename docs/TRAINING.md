@@ -64,6 +64,69 @@ keys. Older checkpoints without precision/layout keys resume as fp32/auto.
 Resuming a completed run is a safe no-op; rerunning without `--resume` starts a
 new run and overwrites prior artifacts.
 
+### Realism training options
+
+`--gan-weight` and `--fm-weight` (default 0, off) add a conditional
+multi-scale PatchGAN critic (`fake_thermal/discriminator.py`, hinge loss,
+spectral norm) and pix2pixHD feature matching on its activations. The critic
+and its optimizer are checkpointed, so adversarial runs resume. Feature-matching
+values are small (~0.01), so useful weights are around 10; `--d-lr` sets the
+critic learning rate (default 2e-4).
+
+`--fullres` adds a small full-resolution RGB feature path into the head.
+Without it the finest features the head sees are a bilinear upsample of the
+stride-2 decoder output, which caps pixel-level detail. `--init` warm-starts
+from a checkpoint (EMA weights preferred) or an exported state dict; a model
+without the full-resolution path loads into one with it and reproduces its
+output exactly, because the new head inputs start at zero.
+
+`--precision bf16` enables bfloat16 autocast on CUDA (safer than fp16 for
+adversarial training). On CUDA, cuDNN autotuning and TF32 are enabled.
+
+`--workers` defaults to the CPU count minus two (at most 16). Augmenting one
+448px sample costs ~19 ms of CPU on an M1 Pro core and more on rented vCPUs;
+with the old default of two workers, rented RTX 4090s sat at roughly a third
+of their speed waiting for images. Training targets are dequantized (uniform
++-0.5 grey level) before the percentile stretch so a critic cannot tell real
+from generated thermal by the 8-bit value lattice.
+
+`--snapshot-every N` also saves fp16 copies of the evaluated weights to
+`snapshots/iter_N.pt`, so mid-run models survive and can be compared.
+
+### pix2pix-Turbo (SD-Turbo, one step)
+
+`scripts/train_turbo.py` fine-tunes pix2pix-Turbo (Parmar et al. 2024; adapted
+in `fake_thermal/turbo.py`) on the same paired data: LoRA adapters on SD-Turbo's
+UNet and VAE, VAE skip connections, L2 + 5 x LPIPS(VGG) reconstruction and a
+CLIP-feature (vision-aided) discriminator at weight 0.5. It needs
+`diffusers transformers peft vision-aided-loss "setuptools<81"` and OpenAI's
+`clip` package, and downloads SD-Turbo (~5 GB). At batch 2 and 512px it needs
+about 15 GB of GPU memory with activation checkpointing (`--no-checkpointing`
+overflows 24 GB) and runs ~1.05 s/step on an RTX 4090. `--init` continues from
+saved weights; `--ids outputs/realism/ids.json` renders the held-out realism
+frames when training ends.
+
+### Rented GPUs
+
+`scripts/vast_fleet.py` runs on the machine holding the Vast API key and the
+prepared data:
+
+```sh
+python scripts/vast_fleet.py up --offer <id> --label run1          # rent, wait for ssh
+python scripts/vast_fleet.py push --label run1                     # code + data512, 6 rsync streams
+python scripts/vast_fleet.py launch --label run1 --arm gan -- --precision bf16 ...
+python scripts/vast_fleet.py launch --label run1 --arm next --after gan -- ...
+python scripts/vast_fleet.py watch --label run1 --floor 0.5 --max-hours 5
+```
+
+`watch` pulls snapshots, grids, logs and rendered frames as runs progress,
+pulls final checkpoints when a run ends, destroys the box once every run on it
+has ended (unless `outputs/vast/<label>.hold` exists), and destroys every box
+when account credit reaches `--floor`. One stream through Vast's ssh relay
+moved ~3 MB/s from the Mac; six parallel rsyncs reached ~11 MB/s. Do not push
+with macOS `tar`: it adds `._` AppleDouble files that the loader reads as an
+extra data source.
+
 With a benchmark batch override, all 50 steps use that batch; otherwise 25
 steps each at 2 and 4 are compared. Install the appropriate platform PyTorch
 wheel for accelerators. Larger crops do not add detail to existing 288px-short-

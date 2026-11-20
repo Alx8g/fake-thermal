@@ -193,6 +193,56 @@ def pairs(args):
     print(f'wrote {len(key)} blind sheets to {sheets}; key in {out / "key.json"}')
 
 
+def singles(args):
+    """No-reference test: one frame per sheet, real or generated, shuffled.
+    Closer to how footage is actually watched: nobody sees the real thermal
+    next to it. Different frames are used for real and generated sheets so a
+    judge never sees the same scene twice."""
+    rng = random.Random(args.seed)
+    groups = json.loads((ROOT / 'ids.json').read_text())
+    out = ROOT / 'single' / args.round
+    sheets = out / 'sheets'
+    sheets.mkdir(parents=True, exist_ok=True)
+    trials = []
+    offset = args.offset
+    for source, stems in sorted(groups.items()):
+        pool = stems[offset:offset + args.per_source * (len(args.names) + 1)]
+        rng.shuffle(pool)
+        chunks = [pool[i::len(args.names) + 1] for i in range(len(args.names) + 1)]
+        trials += [('real', stem) for stem in chunks[0]]
+        for name, chunk in zip(args.names, chunks[1:]):
+            trials += [(name, stem) for stem in chunk]
+    rng.shuffle(trials)
+    key = []
+    for number, (name, stem) in enumerate(trials, 1):
+        folder = ROOT / 'real' if name == 'real' else ROOT / 'fake' / name
+        reference = load_gray(ROOT / 'real' / f'{stem}.png')
+        gray = crop_to_rgb(stem, load_gray(folder / f'{stem}.png', reference.shape[::-1]), args.data)
+        panel(gray, args.width).save(sheets / f'{number:03d}.jpg', quality=92)
+        key.append({'sheet': f'{number:03d}', 'model': name, 'frame': stem})
+    (out / 'key.json').write_text(json.dumps(key, indent=2) + chr(10))
+    print(f'wrote {len(key)} single-frame sheets to {sheets}; key in {out / "key.json"}')
+
+
+def score_singles(args):
+    out = ROOT / 'single' / args.round
+    key = {entry['sheet']: entry for entry in json.loads((out / 'key.json').read_text())}
+    answers = {}
+    for path in args.answers:
+        answers.update(json.loads(Path(path).read_text()))
+    totals = {}
+    for sheet, answer in answers.items():
+        model = key[sheet]['model']
+        stats = totals.setdefault(model, [0, 0])
+        stats[0] += str(answer['verdict']).strip().lower().startswith('gen')
+        stats[1] += 1
+    report = {model: {'judged': n, 'called_generated_pct': round(100 * flagged / n, 1)}
+              for model, (flagged, n) in totals.items()}
+    for model, entry in sorted(report.items(), key=lambda kv: kv[1]['called_generated_pct']):
+        print(f"{model:28s} called generated {entry['called_generated_pct']:5.1f}% of {entry['judged']}")
+    (out / 'score.json').write_text(json.dumps(report, indent=2) + chr(10))
+
+
 def score(args):
     out = ROOT / 'blind' / args.round
     key = {entry['sheet']: entry for entry in json.loads((out / 'key.json').read_text())}
@@ -247,9 +297,20 @@ def main():
     p = commands.add_parser('score')
     p.add_argument('--round', required=True)
     p.add_argument('answers', nargs='+')
+    p = commands.add_parser('singles')
+    p.add_argument('names', nargs='+')
+    p.add_argument('--round', required=True)
+    p.add_argument('--per-source', type=int, default=6)
+    p.add_argument('--offset', type=int, default=40, help='skip the frames used by the paired test')
+    p.add_argument('--width', type=int, default=512)
+    p.add_argument('--seed', type=int, default=13)
+    p = commands.add_parser('score-singles')
+    p.add_argument('--round', required=True)
+    p.add_argument('answers', nargs='+')
     args = parser.parse_args()
     {'ids': choose_ids, 'real': write_real, 'generate': generate, 'metrics': metrics,
-     'pairs': pairs, 'score': score}[args.command](args)
+     'pairs': pairs, 'score': score, 'singles': singles,
+     'score-singles': score_singles}[args.command](args)
 
 
 if __name__ == '__main__':
