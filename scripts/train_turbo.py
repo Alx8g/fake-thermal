@@ -30,6 +30,7 @@ from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from torchvision import transforms as T
 from torchvision.transforms import functional as TF
 
+from fake_thermal.augment import photo_only
 from fake_thermal.data import normalize_thermal, seed_worker
 from fake_thermal.discriminator import (MultiScaleDiscriminator, discriminator_loss,
                                         generator_adversarial_loss)
@@ -38,8 +39,9 @@ from fake_thermal.discriminator import (MultiScaleDiscriminator, discriminator_l
 class TurboPairs(Dataset):
     """512x512 random crops; thermal stretched, dequantized, 3 channels in [-1, 1]."""
 
-    def __init__(self, data, split='train', stems=None, crop=512, training=True):
+    def __init__(self, data, split='train', stems=None, crop=512, training=True, augment=None):
         root = Path(data) / 'pairs' / split
+        self.augment = augment or {}
         self.rgb, self.thermal = root / 'rgb', root / 'thermal'
         self.stems = stems or sorted(p.stem for p in self.rgb.glob('*.jpg') if not p.name.startswith('._'))
         self.crop, self.training = crop, training
@@ -74,6 +76,9 @@ class TurboPairs(Dataset):
                 rgb, thermal = TF.hflip(rgb), TF.hflip(thermal)
             rgb = self.jitter(rgb)
         target = TF.to_tensor(thermal).repeat(3, 1, 1) * 2 - 1
+        if self.training and any(self.augment.values()):
+            photo = photo_only(np.asarray(rgb, np.float32) / 255, **self.augment)
+            return torch.from_numpy(photo).permute(2, 0, 1).contiguous(), target, stem
         return TF.to_tensor(rgb), target, stem
 
 
@@ -151,6 +156,16 @@ def main():
                         help='weight of a second, RGB-conditioned PatchGAN critic; it sees the photo and '
                              'the thermal together, so it can penalize thermal that copies visible-light '
                              'detail (paint, glare, see-through glass); 0 disables')
+    parser.add_argument('--light-aug', type=float, default=0.,
+                        help='probability of pasting synthetic lamps, headlights, lit windows or light pools '
+                             'onto the photo only, so visible light stops reading as heat')
+    parser.add_argument('--print-aug', type=float, default=0.,
+                        help='probability of pasting text, logos or road-paint stripes onto the photo only')
+    parser.add_argument('--dark-aug', type=float, default=0.,
+                        help='probability of night-exposure darkening of the photo')
+    parser.add_argument('--decay', choices=['none', 'cosine'], default='none',
+                        help='learning-rate decay after warmup; cosine falls to --min-lr-ratio')
+    parser.add_argument('--min-lr-ratio', type=float, default=.1)
     parser.add_argument('--workers', type=int, default=8)
     parser.add_argument('--snapshot-every', type=int, default=1000)
     parser.add_argument('--grid-every', type=int, default=250)
@@ -187,7 +202,15 @@ def main():
     disc = build_discriminator(args.disc, device)
     optimizer_d = torch.optim.AdamW([p for p in disc.parameters() if p.requires_grad], lr=args.lr,
                                     weight_decay=1e-2)
-    schedule = lambda step: min(1., (step + 1) / args.warmup)
+
+    def schedule(step):
+        if step < args.warmup:
+            return (step + 1) / args.warmup
+        if args.decay == 'none':
+            return 1.
+        progress = (step - args.warmup) / max(1, args.iters - args.warmup)
+        return args.min_lr_ratio + (1 - args.min_lr_ratio) * .5 * (1 + np.cos(np.pi * min(1., progress)))
+
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, schedule)
     scheduler_d = torch.optim.lr_scheduler.LambdaLR(optimizer_d, schedule)
     perceptual = lpips.LPIPS(net='vgg').to(device).eval().requires_grad_(False)
@@ -196,7 +219,8 @@ def main():
                       if pair_critic is not None else None)
     gray = lambda image: (image.float().mean(1, keepdim=True) + 1) / 2
 
-    train = TurboPairs(args.data, crop=args.crop)
+    train = TurboPairs(args.data, crop=args.crop,
+                       augment={'p_light': args.light_aug, 'p_print': args.print_aug, 'p_dark': args.dark_aug})
     batches = iter(DataLoader(train, batch_size=args.batch_size, sampler=train.sampler(args.iters * args.batch_size),
                               num_workers=args.workers, worker_init_fn=seed_worker, pin_memory=True,
                               drop_last=True, persistent_workers=args.workers > 0))
