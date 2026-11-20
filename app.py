@@ -66,9 +66,8 @@ with gr.Blocks(title='fake-thermal') as app:
     video = gr.Video(label='Video preview')
     image = gr.Image(label='Image preview', type='filepath')
     files = gr.File(label='Download results', file_count='multiple')
-    # turbo synthesizes its own sensor texture and heat structure
-    engine.change(lambda choice: (gr.update(value=choice == 'unet'), gr.update(value=choice == 'unet')),
-                  engine, [sensor, semantic])
+    # turbo synthesizes its own sensor texture; its semantic prior warms only people and animals
+    engine.change(lambda choice: gr.update(value=choice == 'unet'), engine, sensor)
     button.click(run_media, [upload, palette, side, smoothing, raw, semantic, semantic_strength,
                              device, auto_contrast, flow, sensor, engine],
                  [video, image, files, status], concurrency_limit=1)

@@ -398,8 +398,8 @@ def main():
     parser.add_argument('--smoothing', type=float, default=.65, help='previous-frame weight, [0,1); 0 disables')
     parser.add_argument('--raw', action='store_true')
     parser.add_argument('--threads', type=int, default=2)
-    parser.add_argument('--semantic', action=argparse.BooleanOptionalAction, default=None,
-                        help='semantic/emissive heat prior (default on for unet, off for turbo)')
+    parser.add_argument('--semantic', action=argparse.BooleanOptionalAction, default=True,
+                        help='semantic heat prior (default on; with turbo it warms only people and animals)')
     parser.add_argument('--semantic-strength', type=float, default=.7, help='prior strength, 0 to 1 (default .7)')
     parser.add_argument('--device', choices=DEVICES, default='auto', help='auto selects CUDA, then MPS, then CPU')
     parser.add_argument('--auto-contrast', action=argparse.BooleanOptionalAction, default=True,
@@ -412,7 +412,6 @@ def main():
     args = parser.parse_args()
     unet = args.engine == 'unet'
     args.size = args.size or (384 if unet else 512)
-    args.semantic = unet if args.semantic is None else args.semantic
     args.sensor_sim = unet if args.sensor_sim is None else args.sensor_sim
     try:
         convert(args.input, args.output, args.palette, args.size, args.side_by_side,
