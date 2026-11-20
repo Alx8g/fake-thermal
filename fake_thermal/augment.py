@@ -147,6 +147,57 @@ def add_print(rgb):
     return np.asarray(canvas, np.float32) / 255
 
 
+def _wedge(shape, cy, cx, angle, spread, length):
+    """A soft cone from (cy, cx) along ``angle``, fading with distance: a headlight beam."""
+    h, w = shape
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    dy, dx = yy - cy, xx - cx
+    along = np.cos(angle) * dx + np.sin(angle) * dy
+    across = -np.sin(angle) * dx + np.cos(angle) * dy
+    ahead = np.clip(along, 0, None)
+    width = 1 + ahead * np.tan(spread)
+    beam = np.exp(-.5 * (across / width) ** 2) * np.exp(-ahead / length) * (along > 0)
+    return (beam * np.clip(ahead / 6, 0, 1)).astype(np.float32)
+
+
+def add_cast(rgb):
+    """Light falling on surfaces: headlight beams and street-light pools on the ground,
+    light spilling across a wall. It multiplies the surface, as real light does, so
+    the model learns that brighter ground under a lamp is not warmer ground."""
+    h, w = rgb.shape[:2]
+    gain = np.zeros((h, w), np.float32)
+    tint = np.zeros((h, w, 3), np.float32)
+    # cast light shows most on dark scenes; on a sunlit photo keep it subtle
+    scale = float(np.clip(1.4 - 2 * rgb.mean(), .3, 1.))
+    for _ in range(random.randint(1, 4)):
+        kind = random.choices(['beam', 'pool', 'spill'], [3, 3, 1])[0]
+        colour = _jitter(random.choice([LIGHT_COLOURS[0], LIGHT_COLOURS[1], LIGHT_COLOURS[2],
+                                        LIGHT_COLOURS[5], LIGHT_COLOURS[6]]))
+        if kind == 'beam':  # from a car low in the frame, mostly away from or across the view
+            cy, cx = random.uniform(.45 * h, h), random.uniform(0, w)
+            angle = random.choice([random.uniform(-np.pi * .95, -np.pi * .05),  # up the road
+                                   random.uniform(-.25, .25), random.uniform(np.pi - .25, np.pi + .25)])
+            m = _wedge((h, w), cy, cx, angle, random.uniform(.08, .35), random.uniform(.2, .8) * w)
+            if random.random() < .6:  # a pair of headlights
+                m = np.maximum(m, _wedge((h, w), cy, cx + random.uniform(15, 60), angle,
+                                         random.uniform(.08, .35), random.uniform(.2, .8) * w))
+        elif kind == 'pool':  # under a street lamp: a flattened ellipse on the ground
+            cy, cx = random.uniform(.4 * h, h), random.uniform(0, w)
+            sx = random.uniform(25, 180)
+            m = _blob((h, w), cy, cx, sx * random.uniform(.2, .45), sx)
+            m = np.clip(m * random.uniform(1., 1.6), 0, 1)
+        else:  # light spilling across a facade or shop front
+            cy, cx = random.uniform(0, h), random.uniform(0, w)
+            m = _blob((h, w), cy, cx, random.uniform(30, 160), random.uniform(30, 220),
+                      random.uniform(0, np.pi))
+        strength = random.uniform(.8, 3.) * scale
+        gain += m * strength
+        tint += m[..., None] * strength * colour
+    colour = tint / np.maximum(gain, 1e-6)[..., None]
+    lit = rgb * (1 + gain[..., None] * colour) + gain[..., None] * colour * random.uniform(.02, .08)
+    return np.clip(lit, 0, 1).astype(np.float32)
+
+
 def darken(rgb):
     """Night exposure: crushed shadows, lower gain and sensor noise."""
     out = rgb ** random.uniform(1.3, 2.6) * random.uniform(.25, .7)
@@ -154,12 +205,15 @@ def darken(rgb):
     return np.clip(out, 0, 1).astype(np.float32)
 
 
-def photo_only(rgb, p_light=0., p_print=0., p_dark=0.):
+def photo_only(rgb, p_light=0., p_print=0., p_dark=0., p_cast=0.):
     """Apply the augmentations to a float RGB crop; lights are likelier after darkening."""
     # only darken photos that are not already night shots: those are dark enough
     dark = random.random() < p_dark and float(rgb.mean()) > .3
     if dark:
         rgb = darken(rgb)
+    night = dark or float(rgb.mean()) < .25
+    if random.random() < (min(1., p_cast * 1.8) if night else p_cast):
+        rgb = add_cast(rgb)
     if random.random() < (min(1., p_light * 1.8) if dark else p_light):
         rgb = add_lights(rgb)
     if random.random() < p_print:

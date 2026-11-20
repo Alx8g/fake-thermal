@@ -163,6 +163,9 @@ def main():
                         help='probability of pasting text, logos or road-paint stripes onto the photo only')
     parser.add_argument('--dark-aug', type=float, default=0.,
                         help='probability of night-exposure darkening of the photo')
+    parser.add_argument('--cast-aug', type=float, default=0.,
+                        help='probability of light cast onto surfaces in the photo only (headlight '
+                             'beams, street-light pools, spill on walls), likelier on night photos')
     parser.add_argument('--decay', choices=['none', 'cosine'], default='none',
                         help='learning-rate decay after warmup; cosine falls to --min-lr-ratio')
     parser.add_argument('--min-lr-ratio', type=float, default=.1)
@@ -225,7 +228,8 @@ def main():
     gray = lambda image: (image.float().mean(1, keepdim=True) + 1) / 2
 
     train = TurboPairs(args.data, crop=args.crop,
-                       augment={'p_light': args.light_aug, 'p_print': args.print_aug, 'p_dark': args.dark_aug})
+                       augment={'p_light': args.light_aug, 'p_print': args.print_aug, 'p_dark': args.dark_aug,
+                                'p_cast': args.cast_aug})
     batches = iter(DataLoader(train, batch_size=args.batch_size, sampler=train.sampler(args.iters * args.batch_size),
                               num_workers=args.workers, worker_init_fn=seed_worker, pin_memory=True,
                               drop_last=True, persistent_workers=args.workers > 0))
