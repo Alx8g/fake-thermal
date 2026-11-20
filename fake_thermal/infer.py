@@ -195,6 +195,46 @@ class Predictor:
         return self.model(x)[0, 0].cpu().numpy()
 
 
+DEFAULT_TURBO_WEIGHTS = Path(__file__).resolve().parent / 'weights/turbo.pt'
+ENGINES = ('unet', 'turbo')
+
+
+class TurboPredictor:
+    """pix2pix-Turbo engine: one SD-Turbo denoising step per frame. Much more
+    photographic than the U-Net, much slower; needs the optional diffusers,
+    transformers and peft packages and downloads SD-Turbo (~5 GB) on first use."""
+
+    def __init__(self, weights=DEFAULT_TURBO_WEIGHTS, size=512, device='auto'):
+        if size < 64:
+            raise ValueError('Working short side must be at least 64')
+        try:
+            from fake_thermal.turbo import Pix2PixTurbo
+        except ImportError as error:
+            raise RuntimeError('The turbo engine needs: pip install diffusers transformers peft') from error
+        if not Path(weights).is_file():
+            raise FileNotFoundError(f'Turbo weights not found: {weights}')
+        self.size = size
+        self.device = select_device(device)
+        self.net = Pix2PixTurbo(device=self.device, weights=weights)
+        self.net.set_eval()
+        self.dtype = torch.float16 if self.device.type in ('cuda', 'mps') else None
+
+    def __call__(self, rgb):
+        h, w = rgb.shape[:2]
+        scale = self.size / min(h, w)
+        if scale < 1:
+            rgb = cv2.resize(rgb, (round(w * scale), round(h * scale)), interpolation=cv2.INTER_AREA)
+        return self.net.translate(rgb, dtype=self.dtype)
+
+
+def resize_upsample(heat, rgb):
+    """Plain bicubic upsampling for engines that already synthesize texture;
+    the guided filter would smooth it away."""
+    if heat.shape == rgb.shape[:2]:
+        return heat.astype(np.float32)
+    return np.clip(cv2.resize(heat, (rgb.shape[1], rgb.shape[0]), interpolation=cv2.INTER_CUBIC), 0, 1)
+
+
 def encoder(path, w, h, fps):
     # yuv420p requires even dimensions; pad at most one pixel without stretching.
     return subprocess.Popen(['ffmpeg', '-v', 'error', '-y', '-threads', '1', '-filter_threads', '1', '-f', 'rawvideo',
@@ -216,7 +256,7 @@ def mux_audio(video, original, output):
 def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=False,
             weights=DEFAULT_WEIGHTS, smoothing=.65, raw=False, threads=2,
             semantic=True, semantic_strength=.7, device='auto', auto_contrast=True,
-            flow=True, sensor=True):
+            flow=True, sensor=True, engine='unet', turbo_weights=DEFAULT_TURBO_WEIGHTS):
     start = time.perf_counter()
     source, output = Path(input_path), Path(output_path)
     if source.resolve() == output.resolve():
@@ -225,12 +265,19 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
         raise FileNotFoundError(source)
     if palette not in PALETTES:
         raise ValueError(f'Unknown palette: {palette}')
+    if engine not in ENGINES:
+        raise ValueError(f'Unknown engine: {engine}')
     if not np.isfinite(semantic_strength) or not 0 <= semantic_strength <= 1:
         raise ValueError('Semantic strength must be between 0 and 1')
     smoother = TemporalSmoother(smoothing, flow=flow)
     selected_device = select_device(device)
     sensor_sim = ThermalSensor() if sensor else None
-    predictor = Predictor(weights, size, threads, selected_device.type)
+    if engine == 'turbo':
+        predictor = TurboPredictor(turbo_weights, size, selected_device.type)
+        upsample = resize_upsample
+    else:
+        predictor = Predictor(weights, size, threads, selected_device.type)
+        upsample = guided_upsample
     semantic_predictor = SemanticPrior(device=selected_device.type) if semantic and semantic_strength > 0 else None
     normalizer = DisplayNormalizer() if auto_contrast else None
 
@@ -254,7 +301,7 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
         raw_path = output.with_name(output.stem + '_raw.png') if raw else None
         if raw_path is not None and source.resolve() == raw_path.resolve():
             raise ValueError('Input and raw output must be different files')
-        heat = guided_upsample(predict_heat(rgb), rgb)
+        heat = upsample(predict_heat(rgb), rgb)
         if sensor_sim is not None:
             heat = sensor_sim.update(heat)
         colored = apply_palette(normalizer.update(heat) if normalizer else heat, palette)
@@ -288,7 +335,7 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
                                 raise ValueError(UNREADABLE_MEDIA)
                             rgb = np.frombuffer(buffer, dtype=np.uint8).reshape(h, w, 3)
                             heat = smoother.update(predict_heat(rgb), rgb)
-                            heat = guided_upsample(heat, rgb)
+                            heat = upsample(heat, rgb)
                             if sensor_sim is not None:
                                 heat = sensor_sim.update(heat)
                             display = normalizer.update(heat, reset=smoother.reset_history) if normalizer else heat
@@ -336,28 +383,38 @@ def main():
     parser.add_argument('input', type=Path)
     parser.add_argument('-o', '--output', type=Path, required=True)
     parser.add_argument('--palette', choices=PALETTES, default='ironbow')
-    parser.add_argument('--size', type=int, default=384, help='working short side (default 384)')
+    parser.add_argument('--engine', choices=ENGINES, default='unet',
+                        help='unet: fast small model (default); turbo: SD-Turbo one-step model, '
+                             'far more photographic, slower, needs diffusers/transformers/peft')
+    parser.add_argument('--turbo-weights', type=Path, default=DEFAULT_TURBO_WEIGHTS)
+    parser.add_argument('--size', type=int, default=None,
+                        help='working short side (default 384 for unet, 512 for turbo)')
     parser.add_argument('--side-by-side', action='store_true')
     parser.add_argument('--weights', type=Path, default=DEFAULT_WEIGHTS)
     parser.add_argument('--smoothing', type=float, default=.65, help='previous-frame weight, [0,1); 0 disables')
     parser.add_argument('--raw', action='store_true')
     parser.add_argument('--threads', type=int, default=2)
-    parser.add_argument('--semantic', action=argparse.BooleanOptionalAction, default=True,
-                        help='semantic/emissive heat prior (default on; downloads weights on first use)')
+    parser.add_argument('--semantic', action=argparse.BooleanOptionalAction, default=None,
+                        help='semantic/emissive heat prior (default on for unet, off for turbo)')
     parser.add_argument('--semantic-strength', type=float, default=.7, help='prior strength, 0 to 1 (default .7)')
     parser.add_argument('--device', choices=DEVICES, default='auto', help='auto selects CUDA, then MPS, then CPU')
     parser.add_argument('--auto-contrast', action=argparse.BooleanOptionalAction, default=True,
                         help='temporally stable percentile display contrast (default on; raw is unaffected)')
     parser.add_argument('--flow-smoothing', action=argparse.BooleanOptionalAction, default=True,
                         help='carry the previous heat map along estimated motion with occlusion masking (default on)')
-    parser.add_argument('--sensor-sim', action=argparse.BooleanOptionalAction, default=True,
-                        help='add measured microbolometer noise, banding and vignette (default on)')
+    parser.add_argument('--sensor-sim', action=argparse.BooleanOptionalAction, default=None,
+                        help='simulated microbolometer noise, banding and vignette (default on for unet, '
+                             'off for turbo, which synthesizes its own sensor texture)')
     args = parser.parse_args()
+    unet = args.engine == 'unet'
+    args.size = args.size or (384 if unet else 512)
+    args.semantic = unet if args.semantic is None else args.semantic
+    args.sensor_sim = unet if args.sensor_sim is None else args.sensor_sim
     try:
         convert(args.input, args.output, args.palette, args.size, args.side_by_side,
                 args.weights, args.smoothing, args.raw, args.threads,
                 args.semantic, args.semantic_strength, args.device, args.auto_contrast,
-                args.flow_smoothing, args.sensor_sim)
+                args.flow_smoothing, args.sensor_sim, args.engine, args.turbo_weights)
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
         parser.exit(1, f'fake-thermal: {error}\n')
 
