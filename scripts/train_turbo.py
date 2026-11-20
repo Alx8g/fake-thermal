@@ -149,6 +149,7 @@ def main():
     parser.add_argument('--snapshot-every', type=int, default=1000)
     parser.add_argument('--grid-every', type=int, default=250)
     parser.add_argument('--ids', type=Path, help='held-out realism ids to render at the end')
+    parser.add_argument('--init', type=Path, help='continue from saved Turbo weights (fresh optimizers)')
     parser.add_argument('--device', default='cuda')
     parser.add_argument('--no-checkpointing', dest='checkpointing', action='store_false')
     parser.add_argument('--seed', type=int, default=42)
@@ -168,7 +169,9 @@ def main():
     (args.output / 'config.json').write_text(json.dumps(
         {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}, indent=2) + '\n')
 
-    net = Pix2PixTurbo(device=device)
+    net = Pix2PixTurbo(device=device, weights=args.init)
+    if args.init:
+        print(f'INIT weights from {args.init}', flush=True)
     net.set_train()
     if args.checkpointing:
         net.enable_checkpointing()
