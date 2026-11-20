@@ -74,8 +74,9 @@ class PartSegmenter:
     Needs the optional ``mediapipe`` package; the model (~16 MB) is downloaded
     to the Torch hub cache on first use."""
 
-    def __init__(self, min_height=.12, pad=.15, min_agreement=.4):
+    def __init__(self, min_height=.12, pad=.15, min_agreement=.4, min_overlap=.3, band=.06):
         self.min_height, self.pad, self.min_agreement = min_height, pad, min_agreement
+        self.min_overlap, self.band = min_overlap, band
         self.segmenter = None
 
     def _load(self):
@@ -121,16 +122,27 @@ class PartSegmenter:
             masks = cv2.resize(self.segment(crop), (x1 - x0, y1 - y0), interpolation=cv2.INTER_LINEAR)
             part, seen = part_prior(masks)
             inside = labels[y0:y1, x0:x1] == index
-            if float(seen[inside].mean()) < self.min_agreement:
-                continue  # the part model missed this person; keep the class prior there
-            better = seen >= confidence[y0:y1, x0:x1]
-            target[y0:y1, x0:x1] = np.where(better, part, target[y0:y1, x0:x1])
-            confidence[y0:y1, x0:x1] = np.maximum(seen, confidence[y0:y1, x0:x1])
-            cover[y0:y1, x0:x1] = 1
+            found = seen > .5
+            overlap = (found & inside).sum() / max(1, (found | inside).sum())
+            if float(seen[inside].mean()) < self.min_agreement or overlap < self.min_overlap:
+                # The part model missed this person, or painted the crop around them
+                # (it is a selfie model; small night-time figures confuse it): keep the
+                # class prior there.
+                continue
+            # Only a band around the person, fading to zero at its edge: confidence the
+            # part model leaks over the crop background would otherwise show the crop
+            # as a warm rectangle.
+            r = max(2, round(self.band * bh))
+            size = (2 * r + 1, 2 * r + 1)
+            near = cv2.dilate(inside.astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, size))
+            fade = np.clip(2 * cv2.GaussianBlur(near.astype(np.float32), size, 0) - 1, 0, 1)
+            use = (fade > 0) & (seen >= confidence[y0:y1, x0:x1])
+            target[y0:y1, x0:x1] = np.where(use, part, target[y0:y1, x0:x1])
+            confidence[y0:y1, x0:x1] = np.where(use, seen, confidence[y0:y1, x0:x1])
+            cover[y0:y1, x0:x1] = np.maximum(cover[y0:y1, x0:x1], fade)
         if not cover.any():
             return None
-        feather = max(3, round(.01 * max(h, w))) * 2 + 1
-        return target, confidence, cv2.GaussianBlur(cover, (feather, feather), 0) * cover
+        return target, confidence, cover
 
 
 def fuse_heat(model, prior, confidence, strength=.7):

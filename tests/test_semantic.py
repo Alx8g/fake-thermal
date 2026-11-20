@@ -130,6 +130,23 @@ class SemanticTests(unittest.TestCase):
                 np.zeros(crop.shape[:2], int)]):
             self.assertIsNone(segmenter(np.zeros((80, 80, 3), np.uint8), person, (40, 40)))
 
+    def test_part_segmenter_ignores_crop_background(self):
+        person = np.zeros((40, 40), np.float32)
+        person[4:36, 10:22] = 1
+        segmenter = PartSegmenter(min_height=.2, pad=.5)
+        segmenter.segmenter = object()
+        rgb = np.zeros((80, 80, 3), np.uint8)
+        # a part model that calls the whole crop a face, as the selfie model does on
+        # small night-time figures
+        whole = lambda crop: np.eye(6, dtype=np.float32)[np.full(crop.shape[:2], 3)]
+        with patch.object(segmenter, 'segment', side_effect=whole):
+            _, _, cover = segmenter(rgb, person, (40, 40))
+            self.assertEqual(float(cover[20, 16]), 1.)
+            self.assertEqual(float(cover[20, 5]), 0.)  # inside the crop, beyond the band
+            self.assertEqual(float(cover[0, 16]), 0.)
+            segmenter.min_overlap = .5
+            self.assertIsNone(segmenter(rgb, person, (40, 40)))
+
     def test_convert_controls_without_network(self):
         with tempfile.TemporaryDirectory() as directory:
             source, output = Path(directory) / 'in.png', Path(directory) / 'out.png'
