@@ -31,6 +31,8 @@ from torchvision import transforms as T
 from torchvision.transforms import functional as TF
 
 from fake_thermal.data import normalize_thermal, seed_worker
+from fake_thermal.discriminator import (MultiScaleDiscriminator, discriminator_loss,
+                                        generator_adversarial_loss)
 
 
 class TurboPairs(Dataset):
@@ -145,6 +147,10 @@ def main():
     parser.add_argument('--lambda-lpips', type=float, default=5.)
     parser.add_argument('--lambda-gan', type=float, default=.5)
     parser.add_argument('--disc', default='vagan')
+    parser.add_argument('--pair-gan-weight', type=float, default=0.,
+                        help='weight of a second, RGB-conditioned PatchGAN critic; it sees the photo and '
+                             'the thermal together, so it can penalize thermal that copies visible-light '
+                             'detail (paint, glare, see-through glass); 0 disables')
     parser.add_argument('--workers', type=int, default=8)
     parser.add_argument('--snapshot-every', type=int, default=1000)
     parser.add_argument('--grid-every', type=int, default=250)
@@ -185,6 +191,10 @@ def main():
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, schedule)
     scheduler_d = torch.optim.lr_scheduler.LambdaLR(optimizer_d, schedule)
     perceptual = lpips.LPIPS(net='vgg').to(device).eval().requires_grad_(False)
+    pair_critic = MultiScaleDiscriminator().to(device) if args.pair_gan_weight else None
+    pair_optimizer = (torch.optim.Adam(pair_critic.parameters(), lr=2e-4, betas=(.5, .999))
+                      if pair_critic is not None else None)
+    gray = lambda image: (image.float().mean(1, keepdim=True) + 1) / 2
 
     train = TurboPairs(args.data, crop=args.crop)
     batches = iter(DataLoader(train, batch_size=args.batch_size, sampler=train.sampler(args.iters * args.batch_size),
@@ -207,7 +217,12 @@ def main():
             lp = perceptual(pred.float(), target).mean()
             disc.requires_grad_(False)
             g_adv = disc(pred, for_G=True).mean()
+            if pair_critic is not None:
+                pair_critic.requires_grad_(False)
+                g_pair = generator_adversarial_loss(pair_critic(rgb, gray(pred))).float()
         loss = args.lambda_l2 * l2 + args.lambda_lpips * lp + args.lambda_gan * g_adv.float()
+        if pair_critic is not None:
+            loss = loss + args.pair_gan_weight * g_pair
         if not torch.isfinite(loss):
             raise RuntimeError(f'Non-finite loss at step {step}: {loss.item()}')
         optimizer.zero_grad(set_to_none=True)
@@ -227,11 +242,21 @@ def main():
         torch.nn.utils.clip_grad_norm_(disc.parameters(), 1.)
         optimizer_d.step()
         scheduler_d.step()
+        if pair_critic is not None:
+            pair_critic.requires_grad_(True)
+            with autocast(device):
+                d_pair = discriminator_loss(pair_critic(rgb, gray(target)),
+                                            pair_critic(rgb, gray(pred.detach()))).float()
+            pair_optimizer.zero_grad(set_to_none=True)
+            d_pair.backward()
+            pair_optimizer.step()
 
         if step % 20 == 0:
             elapsed = time.perf_counter() - clock
+            pair = (f' g_pair={g_pair.item():.4f} d_pair={d_pair.item():.4f}'
+                    if pair_critic is not None else '')
             print(f'iter={step}/{args.iters} loss={loss.item():.4f} l2={l2.item():.4f} lpips={lp.item():.4f} '
-                  f'g_adv={g_adv.item():.4f} d={d_loss.item():.4f} elapsed_s={elapsed:.0f} '
+                  f'g_adv={g_adv.item():.4f} d={d_loss.item():.4f}{pair} elapsed_s={elapsed:.0f} '
                   f'wall_s_per_iter={elapsed / step:.3f}', flush=True)
         if step % args.grid_every == 0 or step == args.iters:
             save_grid(net, val_batch, args.output / f'val_{step:06d}.jpg')
