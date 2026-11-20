@@ -101,7 +101,7 @@ not been validated. See [media behavior and limitations](docs/INFERENCE.md).
 ### Photographic engine (`--engine turbo`)
 
 ```sh
-python -m pip install diffusers transformers peft
+python -m pip install diffusers transformers peft mediapipe
 fake-thermal input.mov -o out.mp4 --engine turbo
 fake-thermal input.mov -o out.mp4 --engine turbo --turbo-weights path/to/turbo.pt --side-by-side
 ```
@@ -116,8 +116,16 @@ It downloads SD-Turbo (~5 GB) from Hugging Face on first use; check
 commercial use. With the turbo engine the semantic prior warms only people and
 animals (vehicles excluded, edges fitted to the photo) and sensor simulation
 defaults off (it synthesizes its own sensor texture); temporal smoothing, auto
-contrast and palettes work as before. Realism measurements for both engines are
-in [the experiment log](docs/EXPERIMENTS.md).
+contrast and palettes work as before.
+
+People large enough to segment get body-part heat instead of one uniform level:
+exposed skin hottest, clothing warm but cooler, hair, caps, masks and glasses
+cooler still. Parts come from Google's MediaPipe multiclass selfie segmenter
+(`mediapipe` package, Apache 2.0 model card; the ~16 MB model downloads to the
+Torch cache on first use); distant people keep the uniform level, and without
+`mediapipe` every person does. In a blind test on close-up frames, judges
+preferred the part-aware rendering 46 times out of 48. Realism and flicker
+measurements for both engines are in [the experiment log](docs/EXPERIMENTS.md).
 
 ## Web UI
 

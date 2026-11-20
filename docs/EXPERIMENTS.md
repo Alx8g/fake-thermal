@@ -4,6 +4,71 @@ A running lab notebook for the photorealism campaign: what was tried, what it
 measured, what it cost. Newest first. Conclusions are folded into TRAINING.md
 and ROADMAP.md.
 
+## People, flicker and the augmented run (20-21 Nov 2026, night)
+
+**Part-aware people heat.** On close-up footage (talking heads, people walking
+towards the camera) the turbo engine's uniform people prior painted whole
+suits and shirts as hot as faces, with a soft glow around each person; turbo
+alone, without the prior, often rendered faces dark, following the visible skin
+tone. The prior now splits people large enough to segment (at least 12% of the
+frame height) into face skin, body skin, clothes, hair and accessories with
+MediaPipe's multiclass selfie segmenter, run on a padded crop around each
+person, and raises each part towards its own level (skin .92-.95, clothes .62,
+hair .55, accessories .5). Distant people keep the uniform .9.
+
+Blind preference test (`scripts/preference_test.py`, prompt
+`scripts/preference_judge_prompt.md`): 16 frames from the user's own footage
+(trade-show talking heads, beach interviews, a crowd, a corridor walk), six fresh
+judges, Latin square, 48 judgements per comparison, sides random. No real
+thermal exists for these frames, so judges pick the panel that looks more like
+a real thermal camera frame.
+
+| Comparison | Preferred |
+| --- | --- |
+| part-aware vs uniform prior | part-aware 46/48 |
+| part-aware vs no prior | part-aware 47/48 |
+
+Judges' reasons: warm face and arms, cooler cap, shirt and hair, cold glasses,
+crisp outline; uniform rendering was called "an evenly glowing blob with a
+halo", no prior "a dark face like visible skin tone". The judge prompt names
+skin, clothing and hair as things to consider, which may favour the part-aware
+render. On the held-out set, which has almost no close-up people, nothing moves:
+KID x1000 38.6 vs 38.8, DISTS 0.283 for both.
+
+**Flicker.** `scripts/flicker_report.py` measures the warping error: optical
+flow is estimated, the previous frame is carried along it, and the mean absolute
+difference is taken over tracked pixels, on a p1/p99 clip stretch. Two FLIR
+video clips of 90 consecutive frames, which have registered real thermal, plus
+the 116-frame corridor walk (no real thermal). Own-flow error estimates the motion on
+each stream itself, which is the fair comparison with the real camera: its
+per-frame registration jitters against the colour video's flow.
+
+| Stream | FLIR clip 1 | FLIR clip 2 | Walk |
+| --- | --- | --- | --- |
+| colour video (reference) | .0042 | .0098 | .0047 |
+| turbo, no smoothing | .0093 | .0137 | .0115 |
+| turbo, smoothing .65 (default) | .0030 | .0053 | .0062 |
+| turbo, smoothing .8 | .0018 | .0034 | .0047 |
+| real thermal camera | .0086 | .0099 | n/a |
+
+Unsmoothed turbo changes from frame to frame about as much as the real camera
+does. With the default motion-compensated smoothing it is steadier than the
+real camera, so the default stays at .65 (a higher weight would add lag on fast
+motion for no visible gain).
+
+**turbo4 (running).** turbo2 plus 24k steps on one rented 4090 (Texas,
+$0.375/h), with photo-only augmentations (`fake_thermal/augment.py`): synthetic
+lamps, headlight pairs, rows of street lights, lit windows, light pools,
+printed text and paint stripes pasted onto the photo while the thermal target
+stays unchanged, and night darkening of photos that are not already dark.
+Probabilities .35 / .15 / .2; cosine learning rate 1e-5 to 1e-6;
+checkpointing only the VAE (0.85 s per step, against 1.06 with full
+checkpointing; full no-checkpointing runs out of memory at batch 2). A first
+rented host went offline within minutes and was destroyed (about $0.05). The
+second host bills bandwidth at $29/TB, so pushing the data and downloading
+SD-Turbo cost $0.36 before training started; check `inet_down_cost` before
+renting.
+
 ## How realism is measured (from 20 Nov 2026, afternoon)
 
 The goal is thermal output that cannot be told apart from a real thermal
