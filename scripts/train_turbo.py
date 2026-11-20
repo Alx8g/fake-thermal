@@ -12,10 +12,13 @@ realism frames (outputs/realism/ids.json) are rendered for scoring.
 import argparse
 import json
 from collections import Counter
+import os
 from pathlib import Path
 import random
 import sys
 import time
+
+os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
