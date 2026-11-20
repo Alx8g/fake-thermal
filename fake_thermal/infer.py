@@ -204,7 +204,7 @@ class TurboPredictor:
     photographic than the U-Net, much slower; needs the optional diffusers,
     transformers and peft packages and downloads SD-Turbo (~5 GB) on first use."""
 
-    def __init__(self, weights=DEFAULT_TURBO_WEIGHTS, size=512, device='auto', skip=1., light_knee=None):
+    def __init__(self, weights=DEFAULT_TURBO_WEIGHTS, size=512, device='auto', skip=1.):
         if size < 64:
             raise ValueError('Working short side must be at least 64')
         try:
@@ -213,7 +213,7 @@ class TurboPredictor:
             raise RuntimeError('The turbo engine needs: pip install diffusers transformers peft') from error
         if not Path(weights).is_file():
             raise FileNotFoundError(f'Turbo weights not found: {weights}')
-        self.size, self.skip, self.light_knee = size, skip, light_knee
+        self.size, self.skip = size, skip
         self.device = select_device(device)
         self.net = Pix2PixTurbo(device=self.device, weights=weights)
         self.net.set_eval()
@@ -224,19 +224,7 @@ class TurboPredictor:
         scale = self.size / min(h, w)
         if scale < 1:
             rgb = cv2.resize(rgb, (round(w * scale), round(h * scale)), interpolation=cv2.INTER_AREA)
-        if self.light_knee is not None:
-            rgb = compress_highlights(rgb, self.light_knee)
         return self.net.translate(rgb, dtype=self.dtype, skip=self.skip)
-
-
-def compress_highlights(rgb, knee=.7, slope=.25):
-    """Soften the brightest parts of the photo before translation. Visible
-    light sources (street lamps, lit windows, signals, headlights) are the
-    blind judges' most common giveaway: the model copies their glow, while in
-    real LWIR lamps are small warm points and windows read cold."""
-    x = rgb.astype(np.float32) / 255
-    x = np.where(x > knee, knee + (x - knee) * slope, x)
-    return np.clip(x * 255, 0, 255).astype(np.uint8)
 
 
 def resize_upsample(heat, rgb):

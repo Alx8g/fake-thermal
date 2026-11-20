@@ -92,8 +92,7 @@ def generate(args):
     from fake_thermal.semantic import SemanticPrior, fuse_heat, guided_upsample
     from fake_thermal.sensor import ThermalSensor
     if args.engine == 'turbo':
-        predictor = TurboPredictor(args.weights, size=args.size, device=args.device, skip=args.skip,
-                                   light_knee=args.light_knee)
+        predictor = TurboPredictor(args.weights, size=args.size, device=args.device, skip=args.skip)
         args.guided = False
     else:
         predictor = Predictor(weights=args.weights, size=args.size, device=args.device, threads=4)
@@ -305,7 +304,6 @@ def main():
     p.add_argument('--no-guided', dest='guided', action='store_false')
     p.add_argument('--engine', choices=('unet', 'turbo'), default='unet')
     p.add_argument('--skip', type=float, default=1., help='turbo skip-connection strength')
-    p.add_argument('--light-knee', type=float, help='turbo: compress photo highlights above this level')
     p.add_argument('--semantic', type=float, default=0., help='semantic prior strength (0 = off)')
     p.add_argument('--no-emissive', dest='emissive', action='store_false',
                    help='drop the flame/light colour heuristic from the semantic prior')
