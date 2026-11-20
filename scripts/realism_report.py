@@ -39,6 +39,26 @@ def stretch8(image):
     return (normalize_thermal(image) * 255).round().astype(np.uint8)
 
 
+def rgb_box(rgb, threshold=20, margin=4):
+    """Bounding box of the part of the frame the RGB camera actually covers.
+    FLIR's aligned RGB leaves ~30/65 px black bands top/bottom and ~80 px at the
+    sides; the thermal there has no RGB counterpart, so it is excluded."""
+    gray = np.asarray(rgb).max(axis=2)
+    rows, cols = np.where(gray.max(1) > threshold)[0], np.where(gray.max(0) > threshold)[0]
+    return (rows[0] + margin, rows[-1] + 1 - margin, cols[0] + margin, cols[-1] + 1 - margin)
+
+
+_BOXES = {}
+
+
+def crop_to_rgb(stem, image, data=Path('data512')):
+    if stem not in _BOXES:
+        with Image.open(data / f'pairs/val/rgb/{stem}.jpg') as im:
+            _BOXES[stem] = rgb_box(im.convert('RGB'))
+    top, bottom, left, right = _BOXES[stem]
+    return image[top:bottom, left:right]
+
+
 def choose_ids(args):
     selection = set(validation_ids(args.data))
     paths = sorted((args.data / 'pairs/val/rgb').glob('*.jpg'))
@@ -100,14 +120,17 @@ def metrics(args):
     import piq
     torch.manual_seed(0)
     stems = test_ids()
-    real = {s: load_gray(ROOT / 'real' / f'{s}.png') for s in stems}
+    full = {s: load_gray(ROOT / 'real' / f'{s}.png') for s in stems}
+    real = {s: crop_to_rgb(s, full[s], args.data) for s in stems}
     results = {}
     dists = piq.DISTS(reduction='none')
     for name in args.names:
         folder = ROOT / 'fake' / name
-        fake = {s: load_gray(folder / f'{s}.png', real[s].shape[::-1]) for s in stems}
+        fake = {s: crop_to_rgb(s, load_gray(folder / f'{s}.png', full[s].shape[::-1]), args.data)
+                for s in stems}
         kid = KernelInceptionDistance(subset_size=min(100, len(stems)), subsets=50)
-        as_rgb = lambda frames: torch.from_numpy(np.stack(frames)).unsqueeze(1).repeat(1, 3, 1, 1)
+        square = lambda a: np.asarray(Image.fromarray(a).resize((299, 299), Image.BICUBIC))
+        as_rgb = lambda frames: torch.from_numpy(np.stack([square(f) for f in frames])).unsqueeze(1).repeat(1, 3, 1, 1)
         for start in range(0, len(stems), 32):
             chunk = stems[start:start + 32]
             kid.update(as_rgb([real[s] for s in chunk]), real=True)
@@ -150,7 +173,8 @@ def pairs(args):
     key = []
     for number, (name, stem) in enumerate(trials, 1):
         real = load_gray(ROOT / 'real' / f'{stem}.png')
-        fake = load_gray(ROOT / 'fake' / name / f'{stem}.png', real.shape[::-1])
+        fake = crop_to_rgb(stem, load_gray(ROOT / 'fake' / name / f'{stem}.png', real.shape[::-1]), args.data)
+        real = crop_to_rgb(stem, real, args.data)
         real_left = rng.random() < .5
         left, right = (real, fake) if real_left else (fake, real)
         a, b = panel(left, args.width), panel(right, args.width)
