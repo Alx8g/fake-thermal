@@ -25,6 +25,9 @@ file is the mean of the 2k-3k snapshots, in fp16.
   on daytime street scenes it warms the sky and trees and darkens the road
   nearest the camera, as if the headlight beams it was trained to ignore
   were there.
+- Single frames, no reference (s5, 4 judges, 24 frames each): called
+  generated 54% of the time, turbo4 63%, real frames 46%. With 24 frames the
+  uncertainty is about 10 points either way.
 - Fake vs fake on the user's 16 close-up frames (6 judges each): preferred
   on 79 of 96 sheets and 14 of 16 frames. The lit SEMA pillar no longer
   reads as warm as the shirt, floors and tables stop glowing, and people
