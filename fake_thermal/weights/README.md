@@ -21,12 +21,16 @@ downloaded from Hugging Face on first use and is under its own licence.
 Held-out realism with the semantic prior: KID x1000 31.7, DISTS 0.266
 (turbo4: 32.6, 0.268; turbo2: 38.9, 0.283). Blind judges spotted it next to
 the real frame 71% of the time against turbo4's 73% in the same round (KAIST
-street scenes: 16 of 32, chance), and called single frames generated 54% of
-the time (real frames: 46%, turbo4: 63%, 24 frames each). Shown beside
-turbo4's render of the same frame with no real panel, it was preferred on 79
-of 96 sheets of the user's own footage (lit pillars, floors and tables no
-longer read warm) and tied on held-out frames: ahead at night, behind on
-daytime street scenes, where it warms the sky and darkens the near road.
+street scenes: 16 of 32, chance); with the frames shown as separate images
+and the decoder's stripes removed, 82% against turbo4's 81% (KAIST 20 of
+32). They called single frames generated 54% of the time (real frames: 46%,
+turbo4: 63%, 24 frames each). Shown beside turbo4's render of the same frame
+with no real panel, it was preferred on 79 of 96 sheets of the user's own
+footage (all 49 with it on the right, 30 of 47 on the left, which those
+judges picked less often; lit pillars, floors and tables no longer read
+warm) and tied on
+held-out frames: ahead at night, behind on daytime street scenes, where it
+warms the sky and darkens the near road.
 
 Both are plausible thermal-appearance models, not calibrated temperature
 models. Full measurements: [docs/EXPERIMENTS.md](../../docs/EXPERIMENTS.md).

@@ -28,8 +28,17 @@ it on the left, the side that worked against it.
 
 `realism_report.py pairs` and `prefer` and `preference_test.py sheets` now
 write each pair as two files, NNN_A.png and NNN_B.png, judged with
-`scripts/pair_judge_prompt.md`; `--side-by-side` keeps the old single image.
-`singles` was never affected.
+`scripts/pair_judge_prompt.md` (fake vs fake) or
+`scripts/blind_judge_prompt.md` (real vs fake); `--side-by-side` keeps the
+old single image. `singles` was never affected. Every scorer prints each
+judge's A-pick count and flags one-sided judges.
+
+Real vs fake, re-measured in the new format (r8, 8 judges, 96 pairs per
+model, no judge one-sided, right 80% of the time when the real frame was A
+and 84% when it was B): the shipped pipeline (turbo4-cast, stripes removed)
+was spotted 82.3% of the time (FLIR 27/32, KAIST 20/32, LLVIP 32/32), turbo4
+81.2% (29/32, 17/32, 32/32). That is a tie, as in r6, and within the 71-87%
+range of the side-by-side rounds.
 
 **Ships: removing turbo's period-2 stripes.** Judges kept naming a "grid",
 "mesh" or "checkerboard" on faces, walls and floors of the user's frames. A
