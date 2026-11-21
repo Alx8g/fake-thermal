@@ -6,7 +6,7 @@ from unittest.mock import patch
 import numpy as np
 from PIL import Image
 
-from fake_thermal.infer import convert, resize_upsample
+from fake_thermal.infer import convert, remove_stripes, resize_upsample
 
 
 class EngineTests(unittest.TestCase):
@@ -19,6 +19,17 @@ class EngineTests(unittest.TestCase):
         self.assertLessEqual(out.max(), 1)
         same = resize_upsample(heat, np.zeros((16, 24, 3), dtype=np.uint8))
         self.assertTrue(np.array_equal(same, heat))
+
+    def test_remove_stripes_drops_period_two_and_keeps_other_texture(self):
+        y, x = np.mgrid[0:64, 0:96].astype(np.float32)
+        smooth = .3 + .4 * x / 95
+        texture = .05 * np.sin(2 * np.pi * (x + y) / 4)
+        stripes = .03 * np.where(x % 2, -1, 1) + .02 * np.where(y % 2, -1, 1)
+        out = remove_stripes(smooth + texture + stripes)
+        self.assertEqual(out.dtype, np.float32)
+        inner = (slice(8, -8), slice(8, -8))
+        self.assertLess(np.abs(out - smooth - texture)[inner].max(), .004)
+        self.assertLess(np.abs(remove_stripes(smooth + texture) - smooth - texture)[inner].max(), .004)
 
     def test_turbo_engine_runs_without_guided_filter(self):
         with tempfile.TemporaryDirectory() as directory:

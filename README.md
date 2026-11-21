@@ -120,7 +120,9 @@ It downloads SD-Turbo (~5 GB) from Hugging Face on first use; check
 commercial use. With the turbo engine the semantic prior warms only people and
 animals (vehicles excluded, edges fitted to the photo) and sensor simulation
 defaults off (it synthesizes its own sensor texture); temporal smoothing, auto
-contrast and palettes work as before.
+contrast and palettes work as before. The fine alternating-row and
+alternating-column pattern SD-Turbo's decoder leaves, which real thermal
+cameras do not make, is removed from every frame.
 
 With either engine, people large enough to segment get body-part heat instead
 of one uniform level: exposed skin hottest, clothing warm but cooler, hair,

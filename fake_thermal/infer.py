@@ -226,7 +226,7 @@ class TurboPredictor:
     photographic than the U-Net, much slower; needs the optional diffusers,
     transformers and peft packages and downloads SD-Turbo (~5 GB) on first use."""
 
-    def __init__(self, weights=DEFAULT_TURBO_WEIGHTS, size=512, device='auto', skip=1.):
+    def __init__(self, weights=DEFAULT_TURBO_WEIGHTS, size=512, device='auto', skip=1., destripe=True):
         if size < 64:
             raise ValueError('Working short side must be at least 64')
         try:
@@ -235,7 +235,7 @@ class TurboPredictor:
             raise RuntimeError('The turbo engine needs: pip install diffusers transformers peft') from error
         if not Path(weights).is_file():
             raise FileNotFoundError(f'Turbo weights not found: {weights}')
-        self.size, self.skip = size, skip
+        self.size, self.skip, self.destripe = size, skip, destripe
         self.device = select_device(device)
         self.net = Pix2PixTurbo(device=self.device, weights=weights)
         self.net.set_eval()
@@ -248,7 +248,23 @@ class TurboPredictor:
         scale = self.size / min(h, w)
         if scale < 1:
             rgb = cv2.resize(rgb, (round(w * scale), round(h * scale)), interpolation=cv2.INTER_AREA)
-        return self.net.translate(rgb, dtype=self.dtype, skip=self.skip)
+        heat = self.net.translate(rgb, dtype=self.dtype, skip=self.skip)
+        return remove_stripes(heat) if self.destripe else heat
+
+
+def remove_stripes(heat, sigma=3.):
+    """Remove alternating-row and alternating-column patterns (period 2 pixels).
+
+    turbo's decoder leaves far more of this than real thermal frames have; upsampled
+    to video size or resized for viewing it shows as fine stripes or a mesh. Each
+    pattern is demodulated to zero frequency, its local amplitude taken with a
+    Gaussian blur, and only that is subtracted, so other texture is kept."""
+    heat = heat.astype(np.float32)
+    rows = np.where(np.arange(heat.shape[0]) % 2, -1, 1).astype(np.float32)[:, None]
+    columns = np.where(np.arange(heat.shape[1]) % 2, -1, 1).astype(np.float32)[None, :]
+    for sign in (rows, columns):
+        heat = heat - sign * cv2.GaussianBlur(heat * sign, (0, 0), sigma)
+    return np.clip(heat, 0, 1)
 
 
 def resize_upsample(heat, rgb):
