@@ -4,6 +4,65 @@ A running lab notebook for the photorealism campaign: what was tried, what it
 measured, what it cost. Newest first. Conclusions are folded into TRAINING.md
 and ROADMAP.md.
 
+## Stripes, and judges who see the left panel as grainier (21 Nov 2026, late evening)
+
+**Found: judges see the left panel of a side-by-side sheet as grainier.**
+Four judges were given 16 sheets each with the same image in both panels
+(crops of the user's frames, shown 1:1). Three picked the left panel on all
+16 and called it "grainy, sensor-like" and the identical right panel "waxy,
+denoised". The fourth split 8-8 but described more texture on the left in
+nearly every answer and picked the right for it ("A shows a fine grid").
+Moving the right panel to x=448, a multiple of every likely patch size,
+changed nothing. Shown the same identical pairs as two separate files, two
+judges called every pair identical and split 16-16.
+
+So the side preference is in how the judge model sees one wide image, not in
+the sheets. It explains the one-sided judges above. It also corrects the JPEG
+explanation below: lossless PNG did not remove the effect, and "a grid on the
+left one, whichever model it showed" is exactly this percept. Balanced sides
+cancel it in the totals but it drowns small texture differences: a judge reads
+the left panel's texture as either real sensor noise or a generator grid and
+picks a side for the whole sheet set. The turbo4-cast people round still
+holds: it won 49 of 49 sheets with turbo4-cast on the right and 30 of 47 with
+it on the left, the side that worked against it.
+
+`realism_report.py pairs` and `prefer` and `preference_test.py sheets` now
+write each pair as two files, NNN_A.png and NNN_B.png, judged with
+`scripts/pair_judge_prompt.md`; `--side-by-side` keeps the old single image.
+`singles` was never affected.
+
+**Ships: removing turbo's period-2 stripes.** Judges kept naming a "grid",
+"mesh" or "checkerboard" on faces, walls and floors of the user's frames. A
+period-8 pattern from the VAE decoder was the first suspect, but per-tile
+period-8 templates were no stronger than period-7 or period-9 ones. The
+averaged power spectrum found the real one: alternating rows and alternating
+columns, at 26 times the median power of their frequency ring on the user's
+frames, while the RGB photos have nothing like it. Measured the same way at
+the panel size judges see (rows, columns):
+
+| | FLIR | KAIST | LLVIP |
+|---|---|---|---|
+| real thermal | 3.5, 3.3 | 11.2, 11.4 | 3.4, 5.4 |
+| turbo4-cast | 5.4, 11.9 | 24.8, 81.7 | 16.3, 12.9 |
+| U-Net (gan050) | 3.7, 8.1 | 4.8, 3.9 | 1.7, 2.8 |
+| turbo4-cast, stripes removed | 0.0, 0.0 | 1.7, 9.2 | 2.2, 1.2 |
+
+Real cameras do not make it, and at video size (the heat is upsampled 2-2.7x)
+it becomes fine stripes and moiré. `remove_stripes` in `fake_thermal/infer.py`
+multiplies the heat by the alternating sign, blurs (Gaussian, sigma 3) to get
+the pattern's local amplitude, and subtracts only that; it changes the heat by
+0.7-1.2 grey levels on average. `TurboPredictor` applies it by default.
+
+- Held-out, renders post-processed: KID x1000 31.4 against 32.1, DISTS .2652
+  against .2659.
+- Side by side (before the finding above): 49 to 47 on the user's frames,
+  97 to 95 held-out, 49 to 47 on video-scale crops, with half the judges
+  one-sided.
+- Separate files, 1:1 crops of the frames upsampled to 1080x1920 (6 judges,
+  16 pairs each, no judge one-sided): preferred 53 to 43. Where a judge blamed
+  a grid, checker or mesh on one of the two, they picked the de-striped render
+  25 times out of 34 (p about .01).
+
 ## The night-only cast run (21 Nov 2026, evening)
 
 **Tried and not shipped: cast light on night photos only.** The theory for the
@@ -95,7 +154,9 @@ other. That round was thrown out. Every judge sheet (`pairs`, `singles`,
 `prefer`, `preference_test.py`) is now saved as lossless PNG. The cast-light
 round above was less affected (66 of 96 right-hand picks); it is reported
 with the side split. The held-out `prefer` rounds balance sides within each
-judge, so a side preference cancels there.
+judge, so a side preference cancels there. (Corrected later the same day:
+judges see the left panel as grainier even when both panels are the same
+image, so JPEG was at most part of this. See the late-evening entry above.)
 
 **Tried and not shipped: three inference-time fixes.** Each went after a tell
 the r6 judges named over and over, and each changed only the pipeline, not the
