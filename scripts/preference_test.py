@@ -76,7 +76,9 @@ def sheets(args):
         draw.text((a.width + 24 + b.width // 2, 10), 'B', fill='black')
         sheet.paste(a, (0, 36))
         sheet.paste(b, (a.width + 24, 36))
-        sheet.save(folder / f'{number:03d}.jpg', quality=90)
+        # lossless: JPEG chroma subsampling treated the two panels differently and
+        # judges picked whichever side hid the turbo decoder's faint grid
+        sheet.save(folder / f'{number:03d}.png')
         assignment.setdefault(f'judge{judge + 1}', []).append(f'{number:03d}')
         key.append({'sheet': f'{number:03d}', 'frame': frame, 'A': left, 'B': right})
     (args.out / 'blind' / 'key.json').write_text(json.dumps(key, indent=1) + '\n')

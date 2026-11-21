@@ -207,7 +207,7 @@ def pairs(args):
         draw.text((args.width + 24 + args.width // 2, 10), 'B', fill='black')
         sheet.paste(a, (0, 36))
         sheet.paste(b, (args.width + 24, 36))
-        sheet.save(sheets / f'{number:03d}.jpg', quality=92)
+        sheet.save(sheets / f'{number:03d}.png')  # lossless, see prefer()
         key.append({'sheet': f'{number:03d}', 'model': name, 'frame': stem,
                     'real': 'A' if real_left else 'B'})
     (out / 'key.json').write_text(json.dumps(key, indent=2) + '\n')
@@ -241,7 +241,7 @@ def singles(args):
         folder = ROOT / 'real' if name == 'real' else ROOT / 'fake' / name
         reference = load_gray(ROOT / 'real' / f'{stem}.png')
         gray = crop_to_rgb(stem, load_gray(folder / f'{stem}.png', reference.shape[::-1]), args.data)
-        panel(gray, args.width).save(sheets / f'{number:03d}.jpg', quality=92)
+        panel(gray, args.width).save(sheets / f'{number:03d}.png')
         key.append({'sheet': f'{number:03d}', 'model': name, 'frame': stem})
     (out / 'key.json').write_text(json.dumps(key, indent=2) + chr(10))
     print(f'wrote {len(key)} single-frame sheets to {sheets}; key in {out / "key.json"}')
@@ -344,7 +344,9 @@ def prefer(args):
             draw.text((args.width + 24 + args.width // 2, 10), 'B', fill='black')
             sheet.paste(a, (0, 36))
             sheet.paste(b, (args.width + 24, 36))
-            sheet.save(sheets / f'{number:03d}.jpg', quality=92)
+            # lossless: with JPEG the panels' chroma blocks align differently and a
+            # faint periodic decoder pattern can show on one side only
+            sheet.save(sheets / f'{number:03d}.png')
             key.append({'sheet': f'{number:03d}', 'frame': stem, 'A': pair[0], 'B': pair[1]})
             assignment.setdefault(f'judge{judge}', []).append(f'{number:03d}')
     (out / 'key.json').write_text(json.dumps(key, indent=2) + chr(10))

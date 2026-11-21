@@ -6,16 +6,50 @@ and ROADMAP.md.
 
 ## Lights, night noise and the cast-light run (21 Nov 2026, day)
 
-**Tried and not shipped: cast-light augmentation (mac-cast).** turbo4 continued
-for 3000 steps on the M1 Pro (batch 1, crop 448, 6.5 s/step, 5.5 h, no cloud
-cost) with a new photo-only augmentation, `--cast-aug .5`: headlight beams,
+**Ships: cast-light continuation (`turbo4-cast`).** turbo4 continued for 3000
+steps on the M1 Pro (batch 1, crop 448, 6.5 s/step, 5.5 h, no cloud cost)
+with a new photo-only augmentation, `--cast-aug .5`: headlight beams,
 street-light pools and wall spill multiplied into the photo while the thermal
-target stays as it was (`fake_thermal/augment.py`, `add_cast`). Held-out
-scores held level (mean of the 2k-3k snapshots: KID x1000 31.7, DISTS .266;
-turbo4 32.6, .268). In a same-round blind pairs test (r6, 8 judges, 96 sheets
-per model) judges spotted it 70.8% of the time against turbo4's 72.9%, a tie,
-and its light-related tells were as frequent as turbo4's. Night frames in the
-renders looked almost unchanged. The augmentation stays as an opt-in flag.
+target stays as it was (`fake_thermal/augment.py`, `add_cast`). The shipped
+file is the mean of the 2k-3k snapshots, in fp16.
+
+- Held-out scores: KID x1000 31.7, DISTS .266 (turbo4 32.6, .268).
+- Blind pairs against the real frame (r6, 8 judges, 96 sheets per model):
+  spotted 70.8% of the time against turbo4's 72.9%, a tie, with KAIST at
+  16/32 (chance). Light-related tells were as frequent as turbo4's, and a
+  night lamp probe looked almost unchanged, so at first it was not shipped.
+- Fake vs fake on held-out frames (`prefer`, round c1, 48 frames x 4
+  judges): 99 to 93, a tie overall, but split by source. It won LLVIP and
+  FLIR 41 to 23 each, and judges named light glow, light pools or lit ground
+  against turbo4 50 times and against it 24 times. It lost KAIST 17 to 47:
+  on daytime street scenes it warms the sky and trees and darkens the road
+  nearest the camera, as if the headlight beams it was trained to ignore
+  were there.
+- Fake vs fake on the user's 16 close-up frames (6 judges each): preferred
+  on 79 of 96 sheets and 14 of 16 frames. The lit SEMA pillar no longer
+  reads as warm as the shirt, floors and tables stop glowing, and people
+  stand out from a cooler background. These judges favoured the right-hand
+  panel (see below); with it on the left it still won 30 of 47.
+
+The user's footage is what the tool is for, and the scores did not get worse,
+so it ships, with the daytime street-scene regression as a known limit. A
+50/50 weight average with turbo4 (KID 32.0, DISTS .266) kept that regression
+and lost the night gains: turbo4 was preferred 109 to 83 on held-out frames
+(KAIST 45 to 19, the rest level).
+
+**Found and fixed: a side artifact in the preference sheets.** In a second
+round on the user's frames, judges picked the right-hand panel 89 times out of
+96 and described a "grid" or "crosshatch" texture on the left one, whichever
+model it showed. All three models' raw renders carry the same faint periodic
+pattern from turbo's VAE decoder (its spectral power share was .0012-.0015
+for each). `preference_test.py` saved its sheets as JPEG with the right panel
+at an odd pixel offset, so chroma subsampling treated the two panels
+differently: the pattern survived on one side and was blurred away on the
+other. That round was thrown out. Every judge sheet (`pairs`, `singles`,
+`prefer`, `preference_test.py`) is now saved as lossless PNG. The cast-light
+round above was less affected (66 of 96 right-hand picks); it is reported
+with the side split. The held-out `prefer` rounds balance sides within each
+judge, so a side preference cancels there.
 
 **Tried and not shipped: three inference-time fixes.** Each went after a tell
 the r6 judges named over and over, and each changed only the pipeline, not the
@@ -39,7 +73,7 @@ model. The code is on branch `exp/inference-fixes`, not in the product.
 
 | Held-out (same-day rerun) | KID x1000 | DISTS |
 |---|---|---|
-| turbo4 as shipped | 32.9 | .2675 |
+| turbo4 (the baseline these were tried on) | 32.9 | .2675 |
 | lamps (glow mask) | 32.7 | .2696 |
 | night denoise (dark photos only) | 28.3 | .2694 |
 | small-people refine | 32.6 | .2672 |

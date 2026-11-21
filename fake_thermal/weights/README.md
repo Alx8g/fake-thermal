@@ -12,13 +12,20 @@ every time.
 `turbo.pt` (turbo engine, ~19 MB fp16): pix2pix-Turbo LoRA, input-conv and
 VAE-skip weights for SD-Turbo, trained 11k steps at batch 2 on 512px crops
 (`turbo2`), then 24k more with photo-only light, print and night-darkening
-augmentation and a cosine learning-rate decay; the shipped file is the
-average of the snapshots at 20k-24k (`turbo4`). SD-Turbo itself is
+augmentation and a cosine learning-rate decay (mean of the 20k-24k
+snapshots, `turbo4`), then 3k more at batch 1 with cast-light augmentation:
+headlight beams, street-light pools and wall spill multiplied into the photo
+while the thermal target stays as it was. The shipped file is the mean of
+the 2k-3k snapshots of that last run (`turbo4-cast`). SD-Turbo itself is
 downloaded from Hugging Face on first use and is under its own licence.
-Held-out realism with the semantic prior: KID x1000 32.6, DISTS 0.268
-(turbo2: 38.9, 0.283). Blind judges spotted it next to the real frame 86% of
-the time (59% on KAIST street scenes) and called single frames generated 76%
-of the time (real frames: 33%), level with turbo2 in the same rounds.
+Held-out realism with the semantic prior: KID x1000 31.7, DISTS 0.266
+(turbo4: 32.6, 0.268; turbo2: 38.9, 0.283). Blind judges spotted it next to
+the real frame 71% of the time against turbo4's 73% in the same round (KAIST
+street scenes: 16 of 32, chance). Shown beside turbo4's render of the same
+frame with no real panel, it was preferred on 79 of 96 sheets of the user's
+own footage (lit pillars, floors and tables no longer read warm) and tied on
+held-out frames: ahead at night, behind on daytime street scenes, where it
+warms the sky and darkens the near road.
 
 Both are plausible thermal-appearance models, not calibrated temperature
 models. Full measurements: [docs/EXPERIMENTS.md](../../docs/EXPERIMENTS.md).

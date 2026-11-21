@@ -13,8 +13,9 @@ recover real thermal information from phone RGB sensors. Colors are relative
 predicted intensity, not Celsius/Fahrenheit. Predictions may be wrong: do not
 use them for medical, safety, surveillance decisions, or temperature measurement.
 In blind tests, judges shown a turbo frame next to the real thermal frame of
-the same scene picked the real one 86% of the time (59% on KAIST street
-scenes, where 50% is chance); the U-Net is spotted every time. Outputs are plausible thermal
+the same scene picked the real one 71-87% of the time, depending on the panel
+of judges (on KAIST street scenes as low as 50%, which is chance); the U-Net is
+spotted every time. Outputs are plausible thermal
 appearance, not thermometry. Measurements: [experiment log](docs/EXPERIMENTS.md).
 
 ## Demo
