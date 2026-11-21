@@ -283,7 +283,12 @@ def score(args):
     key = {entry['sheet']: entry for entry in json.loads((out / 'key.json').read_text())}
     answers = {}
     for path in args.answers:
-        answers.update(json.loads(Path(path).read_text()))
+        judge = json.loads(Path(path).read_text())
+        answers.update(judge)
+        picks = [str(answer['real']).strip().upper() for answer in judge.values()]
+        lopsided = len(picks) >= 8 and max(picks.count('A'), picks.count('B')) >= .9 * len(picks)
+        print(f"{Path(path).name}: picked A {picks.count('A')}/{len(picks)}"
+              + ('  one-sided' if lopsided else ''))
     totals = {}
     for sheet, answer in answers.items():
         entry = key[sheet]
