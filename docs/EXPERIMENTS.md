@@ -4,6 +4,49 @@ A running lab notebook for the photorealism campaign: what was tried, what it
 measured, what it cost. Newest first. Conclusions are folded into TRAINING.md
 and ROADMAP.md.
 
+## The night-only cast run (21 Nov 2026, evening)
+
+**Tried and not shipped: cast light on night photos only.** The theory for the
+daytime KAIST regression below was that beams and pools cast onto daytime
+photos had taught the model to read the sky and the near road as lit.
+turbo4-cast was continued for 3000 more steps on the M1 Pro with
+`--cast-day 0`: cast light on night photos as before, none on day photos,
+everything else the same (5.6 h, mean of the 2k-3k snapshots).
+
+- Held-out scores, same-day rerun: KID x1000 32.9 against the shipped
+  model's 32.1 (both about 3.5 either way), DISTS .2664 against .2659, KAIST
+  DISTS .2371 against .2380.
+- Fake vs fake on held-out frames (`prefer`, round k1, the 16 frames per
+  source where the two differ most, 4 judges each): 95 to 97, KAIST 34 to
+  30. Five of the 8 judges picked the same side on 22 or more of their 24
+  sheets. Among the three who did not, the night-only model won 32 of 72,
+  KAIST 7 of 17.
+- Fake vs fake on the user's 16 frames (6 judges): 50 to 46, with four of
+  the six judges one-sided.
+
+The renders barely moved. On KAIST, the night-only model's held-out renders
+differ from the shipped model's by 4.8 grey levels on average; the shipped
+model differs from turbo4 by 20.3. So 3000 steps without day casting did not
+undo what 3000 steps with it had done, and day casting is probably not the
+cause, or not the only one. The run that made the regression also changed
+batch size (1, where turbo4 trained at 2) and crop (448); testing those needs
+another 5.5 h run, for one street-scene look the user's footage does not have.
+turbo4-cast stays.
+
+**Found: one-sided judges mean no visible difference.** When the two renders
+are nearly the same, most judges pick one side on every sheet and then
+describe a consistent difference that is not there: in k1, three judges
+called the right panel "colder" on all 24 sheets and two called the left
+"grainier" on 22. No judge did this in the soup round (s1). Balanced sides
+make such a judge's votes cancel exactly, but `preference_test.py` drew sides
+at random per sheet, so a one-sided judge still moved the score. One judge
+picked the night-only model 10 times out of 16 only because it was on their
+favoured side 10 times. It now balances sides within each judge's sheets of
+each comparison, as `prefer` does. Both scorers print each judge's left-pick
+count and flag judges who picked one side on 90% or more of their sheets. A
+round where most judges are flagged measured no visible difference, whatever
+the totals say. No cloud credit was used.
+
 ## Lights, night noise and the cast-light run (21 Nov 2026, day)
 
 **Ships: cast-light continuation (`turbo4-cast`).** turbo4 continued for 3000
