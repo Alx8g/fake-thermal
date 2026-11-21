@@ -4,6 +4,81 @@ A running lab notebook for the photorealism campaign: what was tried, what it
 measured, what it cost. Newest first. Conclusions are folded into TRAINING.md
 and ROADMAP.md.
 
+## Lights, night noise and the cast-light run (21 Nov 2026, day)
+
+**Tried and not shipped: cast-light augmentation (mac-cast).** turbo4 continued
+for 3000 steps on the M1 Pro (batch 1, crop 448, 6.5 s/step, 5.5 h, no cloud
+cost) with a new photo-only augmentation, `--cast-aug .5`: headlight beams,
+street-light pools and wall spill multiplied into the photo while the thermal
+target stays as it was (`fake_thermal/augment.py`, `add_cast`). Held-out
+scores held level (mean of the 2k-3k snapshots: KID x1000 31.7, DISTS .266;
+turbo4 32.6, .268). In a same-round blind pairs test (r6, 8 judges, 96 sheets
+per model) judges spotted it 70.8% of the time against turbo4's 72.9%, a tie,
+and its light-related tells were as frequent as turbo4's. Night frames in the
+renders looked almost unchanged. The augmentation stays as an opt-in flag.
+
+**Tried and not shipped: three inference-time fixes.** Each went after a tell
+the r6 judges named over and over, and each changed only the pipeline, not the
+model. The code is on branch `exp/inference-fixes`, not in the product.
+
+- *Lamps.* turbo paints a cold disc with a warm ring where a bright lamp or
+  traffic light is, or copies the glow as heat. A light is a compact group
+  of near-saturated pixels (brightest channel .9 or more, at most .15% of the
+  frame) at least 2x and .45 brighter than the brighter quarter of a ring
+  three to five radii out. A sunlit patch beside a shadow is not dark all
+  the way round, so it fails. Over the light's glow (and, in the second
+  version, a disc of three radii) the heat is pulled back to the surrounding
+  heat, keeping the grain.
+- *Night noise.* turbo turns photo noise into sandy speckle. Noisy photos
+  (Immerkaer noise estimate 1.6 or more in 8-bit units; sunlit sand reads
+  1.3-1.4) were run through non-local means at 2.5x that strength before
+  translation.
+- *Small people.* LLVIP people come out flame-like or as a bright ring round
+  a dark body. People 4-35% of the frame tall were re-segmented on a zoomed
+  crop, which gives a crisper outline than the whole-frame 320px map.
+
+| Held-out (same-day rerun) | KID x1000 | DISTS |
+|---|---|---|
+| turbo4 as shipped | 32.9 | .2675 |
+| lamps (glow mask) | 32.7 | .2696 |
+| night denoise (dark photos only) | 28.3 | .2694 |
+| small-people refine | 32.6 | .2672 |
+| all three | 28.2 | .2708 |
+| all three, wider lamp mask, denoise on every noisy photo | 25.8 | .2762 |
+
+The first combination tied turbo4 in a blind pairs round (r7, 96 sheets each:
+fake spotted 85.4% vs 87.5%). These judges were harsher than r6's (turbo4 at
+87.5% here, 72.9% there, with FLIR and LLVIP at 32/32), so a real-vs-fake
+round could not show a small gain. The second combination had the best KID of
+the campaign, so it was put to a more sensitive test: fake against fake. Two
+renders of the same held-out frame sat side by side with no real panel, and
+judges picked the one that looks more like a real camera. The 48 frames were
+the 16 per source where the two renders differed most, each judged by four
+judges. turbo4 was preferred on 184 of 192 sheets and on all 48 frames. The
+judges' reasons:
+
+- the lamp fills read as smooth, inpainted blobs, worst over lit buildings
+  with many lamps;
+- the denoised photos come out over-smoothed, and turbo paints wavy
+  "fingerprint" swirls onto the smoothed roads;
+- the ordinary grain was liked as real sensor noise.
+
+Refinement alone was tested the same way on the 48 frames it changes most
+(47 LLVIP). turbo4 was preferred 108 to 84 and won 20 frames to 10. One judge
+picked the left panel on all 24 of their sheets; without them it is 89 to 79.
+Refined people often came out translucent or fading at the legs, where the
+zoomed crop missed part of the body. Nine sheets named a box seam around a
+refined person, where the fade band met the crop edge. Others did gain a
+crisp, solid outline.
+
+So KID and DISTS pointed the wrong way here: the variant with the best KID
+was the one the eye rejected most clearly. Fake-vs-fake on the frames a
+change touches is now `scripts/realism_report.py prefer` / `score-prefer`
+(prompt `scripts/scene_judge_prompt.md`). It puts each variant on the left in
+exactly half of every judge's sheets, after the side-biased judge above.
+Small inference changes should go through it before shipping. The day used
+the Mac and judge agents only; no cloud credit.
+
 ## People, flicker and the augmented run (20-21 Nov 2026, night)
 
 **Part-aware people heat.** On close-up footage (talking heads, people walking

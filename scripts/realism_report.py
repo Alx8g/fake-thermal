@@ -16,6 +16,12 @@ training split. This script replaces both:
             palette as the product renders it; the key is written separately
   score     accuracy of a judge's answers per model. A judge who can always
             spot the fake scores 100%; 50% means indistinguishable.
+  prefer    fake-vs-fake sheets: two models' renders of the same held-out frame,
+            no real panel, judges pick the one that looks more like a real
+            camera (scripts/scene_judge_prompt.md). Uses the frames where the
+            two differ most, so it measures whether a change, where it shows,
+            looks better; far more sensitive to small changes than pairs.
+  score-prefer  how often each model was preferred, by source and by frame
 """
 import argparse
 import json
@@ -288,6 +294,91 @@ def score(args):
     (out / 'score.json').write_text(json.dumps(report, indent=2) + '\n')
 
 
+def changed_frames(first, second, count, overall=False):
+    """Held-out frames where two renders differ most: the share of pixels that
+    moved by more than 8 levels, the top ``count`` overall or equally many per
+    source."""
+    changes = []
+    for stem in test_ids():
+        a = load_gray(ROOT / 'fake' / first / f'{stem}.png')
+        b = load_gray(ROOT / 'fake' / second / f'{stem}.png', a.shape[::-1])
+        a, b = (crop_to_rgb(stem, x).astype(np.float32) for x in (a, b))
+        changes.append((float((np.abs(a - b) > 8).mean()), stem))
+    changes.sort(reverse=True)
+    if overall:
+        return [stem for _, stem in changes[:count]]
+    sources = sorted({stem.split('_', 1)[0] for _, stem in changes})
+    chosen = []
+    for source in sources:
+        chosen += [stem for _, stem in changes if stem.split('_', 1)[0] == source][:count // len(sources)]
+    return chosen
+
+
+def prefer(args):
+    rng = random.Random(args.seed)
+    first, second = args.names
+    stems = changed_frames(first, second, args.frames, args.overall)
+    out = ROOT / 'prefer' / args.round
+    sheets = out / 'sheets'
+    sheets.mkdir(parents=True, exist_ok=True)
+    # each frame is judged by --per-frame different judges; a judge sees a frame once
+    batches = []
+    for _ in range(args.per_frame):
+        order = stems[:]
+        rng.shuffle(order)
+        batches += [order[i:i + args.batch] for i in range(0, len(order), args.batch)]
+    key, assignment, number = [], {}, 0
+    for judge, batch in enumerate(batches, 1):
+        # each model on the left in half of every judge's sheets, so a judge who
+        # always picks one side cannot favour either model
+        flips = [i % 2 == 0 for i in range(len(batch))]
+        rng.shuffle(flips)
+        for stem, flip in zip(batch, flips):
+            number += 1
+            pair = [second, first] if flip else [first, second]
+            a, b = (panel(crop_to_rgb(stem, load_gray(ROOT / 'fake' / name / f'{stem}.png'), args.data),
+                          args.width) for name in pair)
+            sheet = Image.new('RGB', (2 * args.width + 24, a.height + 36), 'white')
+            draw = ImageDraw.Draw(sheet)
+            draw.text((args.width // 2, 10), 'A', fill='black')
+            draw.text((args.width + 24 + args.width // 2, 10), 'B', fill='black')
+            sheet.paste(a, (0, 36))
+            sheet.paste(b, (args.width + 24, 36))
+            sheet.save(sheets / f'{number:03d}.jpg', quality=92)
+            key.append({'sheet': f'{number:03d}', 'frame': stem, 'A': pair[0], 'B': pair[1]})
+            assignment.setdefault(f'judge{judge}', []).append(f'{number:03d}')
+    (out / 'key.json').write_text(json.dumps(key, indent=2) + chr(10))
+    (out / 'judges.json').write_text(json.dumps(assignment, indent=2) + chr(10))
+    print(f'wrote {len(key)} preference sheets ({len(stems)} frames x {args.per_frame}) for '
+          f'{len(assignment)} judges to {sheets}; key in {out / "key.json"}')
+
+
+def score_prefer(args):
+    out = ROOT / 'prefer' / args.round
+    key = {entry['sheet']: entry for entry in json.loads((out / 'key.json').read_text())}
+    answers = {}
+    for path in args.answers:
+        answers.update(json.loads(Path(path).read_text()))
+    wins, sources, frames = {}, {}, {}
+    for sheet, answer in answers.items():
+        entry = key[sheet]
+        pick = entry[str(answer['realistic']).strip().upper()]
+        wins[pick] = wins.get(pick, 0) + 1
+        source = sources.setdefault(entry['frame'].split('_', 1)[0], {})
+        source[pick] = source.get(pick, 0) + 1
+        frame = frames.setdefault(entry['frame'], {})
+        frame[pick] = frame.get(pick, 0) + 1
+    names = sorted({name for entry in key.values() for name in (entry['A'], entry['B'])})
+    majority = {name: sum(1 for votes in frames.values() if 2 * votes.get(name, 0) > sum(votes.values()))
+                for name in names}
+    report = {'preferred': {name: wins.get(name, 0) for name in names}, 'judged': len(answers),
+              'by_source': sources, 'frames_won': majority, 'frames': len(frames)}
+    for name in names:
+        print(f"{name:28s} preferred {wins.get(name, 0):3d} of {len(answers)}, "
+              f"won {majority[name]} of {len(frames)} frames by majority")
+    (out / 'score.json').write_text(json.dumps(report, indent=2) + chr(10))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--data', type=Path, default=Path('data512'))
@@ -334,10 +425,24 @@ def main():
     p = commands.add_parser('score-singles')
     p.add_argument('--round', required=True)
     p.add_argument('answers', nargs='+')
+    p = commands.add_parser('prefer')
+    p.add_argument('names', nargs=2)
+    p.add_argument('--round', required=True)
+    p.add_argument('--frames', type=int, default=48)
+    p.add_argument('--overall', action='store_true',
+                   help='the most-changed frames overall instead of equally many per source')
+    p.add_argument('--per-frame', type=int, default=4, help='judges per frame')
+    p.add_argument('--batch', type=int, default=24, help='sheets per judge')
+    p.add_argument('--width', type=int, default=512)
+    p.add_argument('--seed', type=int, default=17)
+    p = commands.add_parser('score-prefer')
+    p.add_argument('--round', required=True)
+    p.add_argument('answers', nargs='+')
     args = parser.parse_args()
     {'ids': choose_ids, 'real': write_real, 'generate': generate, 'metrics': metrics,
      'pairs': pairs, 'score': score, 'singles': singles,
-     'score-singles': score_singles}[args.command](args)
+     'score-singles': score_singles, 'prefer': prefer,
+     'score-prefer': score_prefer}[args.command](args)
 
 
 if __name__ == '__main__':
