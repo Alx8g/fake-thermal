@@ -358,9 +358,18 @@ def prefer(args):
 def score_prefer(args):
     out = ROOT / 'prefer' / args.round
     key = {entry['sheet']: entry for entry in json.loads((out / 'key.json').read_text())}
-    answers = {}
+    answers, sides = {}, {}
     for path in args.answers:
-        answers.update(json.loads(Path(path).read_text()))
+        judge = json.loads(Path(path).read_text())
+        answers.update(judge)
+        picks = [str(answer['realistic']).strip().upper() for answer in judge.values()]
+        # a judge who could not tell the renders apart tends to pick one side every
+        # time; sides are balanced per judge, so those votes cancel, but a round where
+        # most judges are one-sided measured no visible difference
+        lopsided = len(picks) >= 8 and max(picks.count('A'), picks.count('B')) >= .9 * len(picks)
+        sides[Path(path).stem] = {'A': picks.count('A'), 'B': picks.count('B'), 'one_sided': lopsided}
+        print(f"{Path(path).name}: picked A {picks.count('A')}/{len(picks)}"
+              + ('  one-sided: could not tell them apart' if lopsided else ''))
     wins, sources, frames = {}, {}, {}
     for sheet, answer in answers.items():
         entry = key[sheet]
@@ -374,7 +383,7 @@ def score_prefer(args):
     majority = {name: sum(1 for votes in frames.values() if 2 * votes.get(name, 0) > sum(votes.values()))
                 for name in names}
     report = {'preferred': {name: wins.get(name, 0) for name in names}, 'judged': len(answers),
-              'by_source': sources, 'frames_won': majority, 'frames': len(frames)}
+              'by_source': sources, 'frames_won': majority, 'frames': len(frames), 'sides': sides}
     for name in names:
         print(f"{name:28s} preferred {wins.get(name, 0):3d} of {len(answers)}, "
               f"won {majority[name]} of {len(frames)} frames by majority")

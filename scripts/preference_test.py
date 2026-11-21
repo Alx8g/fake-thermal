@@ -8,7 +8,7 @@ judges means no judge sees a frame twice.
     python scripts/preference_test.py render FRAMES_DIR OUT            # none / uniform / parts
     python scripts/preference_test.py sheets OUT parts:uniform parts:none --judges 6
     # give each judge scripts/preference_judge_prompt.md + its sheets (judges.json), never key.json
-    python scripts/preference_test.py score OUT answers.json            # {"001": "A", ...}
+    python scripts/preference_test.py score OUT j1.json j2.json ...     # one file per judge
 """
 import argparse
 from collections import Counter, defaultdict
@@ -66,9 +66,18 @@ def sheets(args):
               for judge in range(args.judges) for index, frame in enumerate(frames)]
     rng.shuffle(trials)
     trials.sort(key=lambda trial: trial[0])
+    # each variant on the left in half of every judge's sheets of a comparison: when
+    # two renders look alike, judges tend to pick one side every time, and with sides
+    # drawn at random that habit still leaked into the score
+    flips = defaultdict(list)
+    for judge, _, pair in trials:
+        flips[judge, tuple(pair)].append(len(flips[judge, tuple(pair)]) % 2 == 0)
+    for order in flips.values():
+        rng.shuffle(order)
     key, assignment = [], {}
     for number, (judge, frame, (first, second)) in enumerate(trials, 1):
-        left, right = (first, second) if rng.random() < .5 else (second, first)
+        flip = flips[judge, (first, second)].pop()
+        left, right = (second, first) if flip else (first, second)
         a, b = panel(left, frame), panel(right, frame)
         sheet = Image.new('RGB', (a.width + b.width + 24, args.height + 36), 'white')
         draw = ImageDraw.Draw(sheet)
@@ -86,15 +95,35 @@ def sheets(args):
     print(f'{len(key)} sheets for {args.judges} judges in {folder}')
 
 
+def choice_of(answer):
+    """A judge's pick as 'A' or 'B', from "A" or {"realistic": "A", ...}."""
+    if isinstance(answer, dict):
+        answer = answer['realistic']
+    return str(answer).strip().upper()
+
+
+def one_sided(picks, share=.9, least=8):
+    """Whether a judge picked the same side on at least `share` of `least` or more sheets.
+
+    Such a judge could not tell the renders apart; with sides balanced their votes
+    cancel, so a round where most judges are one-sided measured no difference."""
+    picks = list(picks)
+    return len(picks) >= least and max(picks.count('A'), picks.count('B')) >= share * len(picks)
+
+
 def score(args):
     key = {k['sheet']: k for k in json.loads((args.out / 'blind' / 'key.json').read_text())}
-    answers = json.loads(args.answers.read_text())
     wins, totals = Counter(), Counter()
-    for sheet, choice in answers.items():
-        entry = key[sheet]
-        pair = tuple(sorted((entry['A'], entry['B'])))
-        totals[pair] += 1
-        wins[pair, entry[choice]] += 1
+    for path in args.answers:
+        answers = {sheet: choice_of(answer) for sheet, answer in json.loads(path.read_text()).items()}
+        for sheet, choice in answers.items():
+            entry = key[sheet]
+            pair = tuple(sorted((entry['A'], entry['B'])))
+            totals[pair] += 1
+            wins[pair, entry[choice]] += 1
+        left = sum(choice == 'A' for choice in answers.values())
+        flag = '  one-sided: could not tell them apart' if one_sided(answers.values()) else ''
+        print(f'{path.name}: picked A {left}/{len(answers)}{flag}')
     for pair, total in totals.items():
         print(' vs '.join(f'{name} {wins[pair, name]}/{total}' for name in pair))
 
@@ -116,7 +145,7 @@ def main():
     p.add_argument('--seed', type=int, default=5)
     p = commands.add_parser('score')
     p.add_argument('out', type=Path)
-    p.add_argument('answers', type=Path)
+    p.add_argument('answers', type=Path, nargs='+', help='one JSON file per judge')
     args = parser.parse_args()
     {'render': render, 'sheets': sheets, 'score': score}[args.command](args)
 
