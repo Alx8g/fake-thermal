@@ -91,13 +91,16 @@ def generate(args):
     from fake_thermal.infer import Predictor, TurboPredictor, resize_upsample
     from fake_thermal.semantic import SemanticPrior, fuse_heat, guided_upsample
     from fake_thermal.sensor import ThermalSensor
+    from fake_thermal.lights import neutralize_lights
     if args.engine == 'turbo':
-        predictor = TurboPredictor(args.weights, size=args.size, device=args.device, skip=args.skip)
+        predictor = TurboPredictor(args.weights, size=args.size, device=args.device, skip=args.skip,
+                                   denoise=args.denoise)
         args.guided = False
     else:
         predictor = Predictor(weights=args.weights, size=args.size, device=args.device, threads=4)
     prior = (SemanticPrior(device=args.device, emissive=args.emissive, vehicles=args.vehicles,
-                           sharp=args.sharp_prior, parts=args.parts_prior) if args.semantic else None)
+                           sharp=args.sharp_prior, parts=args.parts_prior,
+                           refine=args.refine_people) if args.semantic else None)
     out = ROOT / 'fake' / args.name
     out.mkdir(parents=True, exist_ok=True)
     for i, stem in enumerate(test_ids()):
@@ -105,7 +108,12 @@ def generate(args):
             rgb = np.asarray(im.convert('RGB'))
         heat = predictor(rgb)
         if prior is not None:
-            heat = fuse_heat(heat, *prior(rgb, heat.shape), args.semantic)
+            semantic, confidence = prior(rgb, heat.shape)
+            if args.lights:
+                heat = neutralize_lights(heat, rgb, exclude=confidence)
+            heat = fuse_heat(heat, semantic, confidence, args.semantic)
+        elif args.lights:
+            heat = neutralize_lights(heat, rgb)
         heat = guided_upsample(heat, rgb) if args.guided else resize_upsample(heat, rgb)
         if args.sensor:
             heat = ThermalSensor(seed=i).update(heat.astype(np.float32))
@@ -313,6 +321,9 @@ def main():
     p.add_argument('--parts-prior', action='store_true',
                    help='skin, clothing and hair heat for people large enough to segment (needs mediapipe)')
     p.add_argument('--sensor', action='store_true')
+    p.add_argument('--lights', action='store_true', help='neutralize light sources in the heat')
+    p.add_argument('--denoise', action='store_true', help='denoise the photo before turbo')
+    p.add_argument('--refine-people', action='store_true', help='re-segment a zoomed crop around each person')
     p = commands.add_parser('metrics')
     p.add_argument('names', nargs='+')
     p = commands.add_parser('pairs')

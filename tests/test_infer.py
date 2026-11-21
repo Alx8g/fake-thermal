@@ -161,6 +161,19 @@ class CLIIntegrationTests(unittest.TestCase):
         self.assertNotEqual(self.cli(source, source).returncode, 0)
         self.assertNotEqual(self.cli(self.root / 'missing.mov', output).returncode, 0)
 
+    def test_lights_option_on_a_night_photo(self):
+        yy, xx = np.mgrid[0:96, 0:128]
+        value = np.where(np.hypot(yy - 30, xx - 50) <= 3, 255, 25).astype(np.uint8)
+        source = self.root / 'night.png'
+        Image.fromarray(np.repeat(value[..., None], 3, 2)).save(source)
+        for flag in ('--lights', '--no-lights'):
+            with self.subTest(flag=flag):
+                output = self.root / f'night{flag}.png'
+                result = self.cli(source, output, flag)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                with Image.open(output) as im:
+                    self.assertEqual(im.size, (128, 96))
+
     def test_raw_image_cannot_overwrite_input(self):
         source = self.root / 'holiday_raw.png'
         Image.new('RGB', (75, 53), 'orange').save(source)

@@ -93,6 +93,35 @@ class SemanticTests(unittest.TestCase):
             factory.return_value.eval.return_value.to.assert_called_once_with(
                 device=torch.device('cpu'), dtype=torch.float32)
 
+    def test_refine_people_resegments_small_people_only(self):
+        with patch('fake_thermal.semantic.deeplabv3_mobilenet_v3_large'):
+            semantic = SemanticPrior(size=32, device='cpu', refine=True)
+        person_channel = semantic.weights.meta['categories'].index('person')
+
+        def crisp(image):
+            # the zoomed segmentation: a sharp upright figure in the middle of the crop
+            probabilities = np.zeros((21, *image.shape[:2]), np.float32)
+            probabilities[0] = 1
+            w = image.shape[1]
+            probabilities[person_channel, :, round(.4 * w):round(.6 * w)] = 1
+            probabilities[0, :, round(.4 * w):round(.6 * w)] = 0
+            return probabilities
+
+        rgb = np.zeros((200, 200, 3), np.uint8)
+        with patch.object(semantic, '_segment', side_effect=crisp) as segment:
+            blob = np.zeros((100, 100), np.float32)
+            blob[30:60, 38:62] = .8  # a blobby 30%-tall person from the whole-frame map
+            refined, window = semantic.refine_people(rgb, blob, (100, 100))
+            self.assertEqual(segment.call_count, 1)
+            self.assertEqual(float(window[45, 50]), 1.)
+            self.assertEqual(float(window[5, 5]), 0.)
+            self.assertAlmostEqual(float(refined[45, 50]), 1.)
+            self.assertLess(float(refined[45, 39]), .2)  # the blob's flank is no longer person
+            for rows in ((10, 80), (50, 52)):  # a close-up and a speck are left alone
+                other = np.zeros((100, 100), np.float32)
+                other[rows[0]:rows[1], 40:60] = .8
+                self.assertIsNone(semantic.refine_people(rgb, other, (100, 100))[1])
+
     def test_part_prior_levels(self):
         masks = np.zeros((3, 4, 6), np.float32)
         masks[0, :, 3] = 1  # face skin

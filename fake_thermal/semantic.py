@@ -152,14 +152,17 @@ def fuse_heat(model, prior, confidence, strength=.7):
 
 
 class SemanticPrior:
-    def __init__(self, size=320, device='auto', emissive=True, vehicles=True, sharp=False, parts=False):
+    def __init__(self, size=320, device='auto', emissive=True, vehicles=True, sharp=False, parts=False,
+                 refine=False):
         """``emissive=False`` drops the colour heuristic for flames and lights;
         ``vehicles=False`` drops vehicle classes (parked cars read cold in real
         thermal), leaving people and animals. ``parts=True`` replaces the
         uniform person heat with skin, clothing and hair levels wherever a
         person is large enough to segment (needs ``mediapipe``); distant
-        people keep the uniform level."""
+        people keep the uniform level. ``refine=True`` re-segments a zoomed crop
+        around each person, which gives small and distant people a crisp outline."""
         self.size, self.emissive, self.vehicles, self.sharp = size, emissive, vehicles, sharp
+        self.refine = refine
         self.parts = None
         if parts:
             try:
@@ -172,18 +175,69 @@ class SemanticPrior:
         self.model = None
 
     @torch.inference_mode()
-    def __call__(self, rgb, output_shape):
+    def _segment(self, image):
+        """Class probabilities (C x H x W) for an HxWx3 uint8 image at its own size."""
         if self.model is None:
             self.model = deeplabv3_mobilenet_v3_large(weights=self.weights).eval().to(
                 device=self.device, dtype=torch.float32)
-        h, w = rgb.shape[:2]
-        size = (round(w * self.size / min(h, w)), round(h * self.size / min(h, w)))
-        small = cv2.resize(rgb, size, interpolation=cv2.INTER_AREA)
-        x = torch.from_numpy(small.copy()).permute(2, 0, 1).unsqueeze(0).float() / 255
+        x = torch.from_numpy(np.ascontiguousarray(image)).permute(2, 0, 1).unsqueeze(0).float() / 255
         x = x.to(self.device)
         x = (x - x.new_tensor([.485, .456, .406])[None, :, None, None]) / x.new_tensor(
             [.229, .224, .225])[None, :, None, None]
-        probabilities = self.model(x)['out'][0].softmax(0).cpu().numpy()
+        return self.model(x)['out'][0].softmax(0).cpu().numpy()
+
+    def refine_people(self, rgb, person, shape, pad=.2, least=.04, most=.35, most_zoom=6.):
+        """Person probability at ``shape`` with each person re-segmented on a zoomed
+        crop, and the weight (0-1, fading out at the edge of each crop's reach) the
+        refined map has there, or None if no person was refined.
+
+        The whole-frame map comes from a 320px segmentation, so a person a few dozen
+        pixels tall gets a blobby outline that the translator turns into a ragged,
+        flame-like glow. Only people between ``least`` and ``most`` of the frame
+        height are refined (close-ups are resolved well already, and keep the
+        part-aware levels); crops are zoomed at most ``most_zoom`` times past the
+        whole-frame scale."""
+        h, w = shape
+        scale_y, scale_x = rgb.shape[0] / h, rgb.shape[1] / w
+        index = self.weights.meta['categories'].index('person')
+        frame_zoom = self.size / min(rgb.shape[:2])
+        count, labels, stats, _ = cv2.connectedComponentsWithStats((person > .5).astype(np.uint8))
+        refined = person.copy()
+        window = np.zeros(shape, np.float32)
+        for component in range(1, count):
+            x, y, bw, bh = stats[component, :4]
+            if not least * h <= bh <= most * h:
+                continue
+            px, py = round(bw * pad) + 2, round(bh * pad) + 2
+            x0, y0, x1, y1 = max(0, x - px), max(0, y - py), min(w, x + bw + px), min(h, y + bh + py)
+            crop = rgb[round(y0 * scale_y):round(y1 * scale_y), round(x0 * scale_x):round(x1 * scale_x)]
+            if min(crop.shape[:2]) < 8:
+                continue
+            zoom = min(self.size / min(crop.shape[:2]), most_zoom * frame_zoom)
+            if zoom < 1.5 * frame_zoom:
+                continue  # big enough already in the whole-frame map
+            big = cv2.resize(crop, (round(crop.shape[1] * zoom), round(crop.shape[0] * zoom)),
+                             interpolation=cv2.INTER_CUBIC)
+            found = cv2.resize(self._segment(big)[index], (x1 - x0, y1 - y0), interpolation=cv2.INTER_AREA)
+            # reach a band around the person that fades to zero at its edge, so the
+            # refined map meets the whole-frame one without a seam
+            r = max(px, py)
+            size = (2 * r + 1, 2 * r + 1)
+            near = cv2.dilate((labels[y0:y1, x0:x1] == component).astype(np.uint8),
+                              cv2.getStructuringElement(cv2.MORPH_ELLIPSE, size))
+            fade = np.clip(2 * cv2.GaussianBlur(near.astype(np.float32), size, 0) - 1, 0, 1)
+            local = window[y0:y1, x0:x1]
+            use = fade > local
+            refined[y0:y1, x0:x1] = np.where(use, fade * found + (1 - fade) * person[y0:y1, x0:x1],
+                                             refined[y0:y1, x0:x1])
+            window[y0:y1, x0:x1] = np.maximum(local, fade)
+        return refined, (window if window.any() else None)
+
+    def __call__(self, rgb, output_shape):
+        h, w = rgb.shape[:2]
+        size = (round(w * self.size / min(h, w)), round(h * self.size / min(h, w)))
+        small = cv2.resize(rgb, size, interpolation=cv2.INTER_AREA)
+        probabilities = self._segment(small)
         prior, confidence = probability_prior(probabilities, self.weights.meta['categories'],
                                               self.vehicles)
         emissive, emissive_confidence = emissive_prior(small)
@@ -203,9 +257,15 @@ class SemanticPrior:
         else:
             prior = cv2.resize(prior, target, interpolation=cv2.INTER_LINEAR)
             confidence = cv2.resize(confidence, target, interpolation=cv2.INTER_LINEAR)
-        if self.parts is not None:
+        if self.refine or self.parts is not None:
             person = cv2.resize(probabilities[self.weights.meta['categories'].index('person')], target,
                                 interpolation=cv2.INTER_LINEAR)
+        if self.refine:
+            person, window = self.refine_people(rgb, person, output_shape)
+            if window is not None:
+                confidence = (window * person + (1 - window) * confidence).astype(np.float32)
+                prior = (window * CLASS_HEAT['person'] + (1 - window) * prior).astype(np.float32)
+        if self.parts is not None:
             resolved = self.parts(rgb, person, output_shape)
             if resolved is not None:
                 part, seen, cover = resolved

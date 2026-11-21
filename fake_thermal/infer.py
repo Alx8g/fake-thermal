@@ -14,7 +14,9 @@ import torch
 from tqdm import tqdm
 
 from fake_thermal.model import ThermalUNet
+from fake_thermal.denoise import denoise_photo
 from fake_thermal.device import DEVICES, memory_format, select_device
+from fake_thermal.lights import neutralize_lights
 from fake_thermal.semantic import SemanticPrior, fuse_heat, guided_upsample
 from fake_thermal.sensor import ThermalSensor
 
@@ -226,7 +228,7 @@ class TurboPredictor:
     photographic than the U-Net, much slower; needs the optional diffusers,
     transformers and peft packages and downloads SD-Turbo (~5 GB) on first use."""
 
-    def __init__(self, weights=DEFAULT_TURBO_WEIGHTS, size=512, device='auto', skip=1.):
+    def __init__(self, weights=DEFAULT_TURBO_WEIGHTS, size=512, device='auto', skip=1., denoise=False):
         if size < 64:
             raise ValueError('Working short side must be at least 64')
         try:
@@ -235,7 +237,7 @@ class TurboPredictor:
             raise RuntimeError('The turbo engine needs: pip install diffusers transformers peft') from error
         if not Path(weights).is_file():
             raise FileNotFoundError(f'Turbo weights not found: {weights}')
-        self.size, self.skip = size, skip
+        self.size, self.skip, self.denoise = size, skip, denoise
         self.device = select_device(device)
         self.net = Pix2PixTurbo(device=self.device, weights=weights)
         self.net.set_eval()
@@ -248,6 +250,9 @@ class TurboPredictor:
         scale = self.size / min(h, w)
         if scale < 1:
             rgb = cv2.resize(rgb, (round(w * scale), round(h * scale)), interpolation=cv2.INTER_AREA)
+        if self.denoise:
+            # sensor noise in the photo becomes speckle in the heat (see fake_thermal/denoise.py)
+            rgb = denoise_photo(rgb)
         return self.net.translate(rgb, dtype=self.dtype, skip=self.skip)
 
 
@@ -280,7 +285,11 @@ def mux_audio(video, original, output):
 def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=False,
             weights=DEFAULT_WEIGHTS, smoothing=.65, raw=False, threads=2,
             semantic=True, semantic_strength=.7, device='auto', auto_contrast=True,
-            flow=True, sensor=True, engine='unet', turbo_weights=DEFAULT_TURBO_WEIGHTS, stride=1):
+            flow=True, sensor=True, engine='unet', turbo_weights=DEFAULT_TURBO_WEIGHTS, stride=1,
+            lights=False, denoise=False):
+    """``lights`` neutralizes lamps and other light sources in the heat; ``denoise``
+    denoises noisy photos before the turbo model. Both are experimental and off by
+    default: blind judges preferred the output without them (docs/EXPERIMENTS.md)."""
     start = time.perf_counter()
     source, output = Path(input_path), Path(output_path)
     if source.resolve() == output.resolve():
@@ -299,7 +308,7 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
     selected_device = select_device(device)
     sensor_sim = ThermalSensor() if sensor else None
     if engine == 'turbo':
-        predictor = TurboPredictor(turbo_weights, size, selected_device.type)
+        predictor = TurboPredictor(turbo_weights, size, selected_device.type, denoise=denoise)
         upsample = resize_upsample
     else:
         predictor = Predictor(weights, size, threads, selected_device.type)
@@ -318,7 +327,11 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
         heat = predictor(rgb)
         if semantic_predictor is not None:
             prior, confidence = semantic_predictor(rgb, heat.shape)
+            if lights:
+                heat = neutralize_lights(heat, rgb, exclude=confidence)
             heat = fuse_heat(heat, prior, confidence, semantic_strength)
+        elif lights:
+            heat = neutralize_lights(heat, rgb)
         return heat
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -443,6 +456,12 @@ def main():
     parser.add_argument('--sensor-sim', action=argparse.BooleanOptionalAction, default=None,
                         help='simulated microbolometer noise, banding and vignette (default on for unet, '
                              'off for turbo, which synthesizes its own sensor texture)')
+    parser.add_argument('--lights', action=argparse.BooleanOptionalAction, default=False,
+                        help='experimental: pull the heat over lamps, headlights and other light '
+                             'sources back to their surroundings (default off)')
+    parser.add_argument('--denoise', action=argparse.BooleanOptionalAction, default=False,
+                        help='experimental: denoise noisy (night, low-light) photos before the turbo '
+                             'model (default off)')
     args = parser.parse_args()
     unet = args.engine == 'unet'
     args.size = args.size or (384 if unet else 512)
@@ -451,7 +470,8 @@ def main():
         convert(args.input, args.output, args.palette, args.size, args.side_by_side,
                 args.weights, args.smoothing, args.raw, args.threads,
                 args.semantic, args.semantic_strength, args.device, args.auto_contrast,
-                args.flow_smoothing, args.sensor_sim, args.engine, args.turbo_weights, args.stride)
+                args.flow_smoothing, args.sensor_sim, args.engine, args.turbo_weights, args.stride,
+                args.lights, args.denoise)
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
         parser.exit(1, f'fake-thermal: {error}\n')
 
