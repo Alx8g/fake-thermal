@@ -27,10 +27,13 @@ class SheetTests(unittest.TestCase):
             root = Path(tmp)
             self.make_round(root, 6, ('parts', 'uniform', 'none'))
             preference_test.sheets(Namespace(out=root, comparisons=['parts:uniform', 'parts:none'],
-                                             judges=4, height=24, seed=3))
+                                             judges=4, height=24, seed=3, side_by_side=False))
             key = json.loads((root / 'blind' / 'key.json').read_text())
             judges = json.loads((root / 'blind' / 'judges.json').read_text())
             sheets = {entry['sheet']: entry for entry in key}
+            for entry in key:
+                for side in 'AB':
+                    self.assertTrue((root / 'blind' / 'sheets' / f"{entry['sheet']}_{side}.png").is_file())
             for numbers in judges.values():
                 left = Counter((tuple(sorted((sheets[n]['A'], sheets[n]['B']))), sheets[n]['A'])
                                for n in numbers)

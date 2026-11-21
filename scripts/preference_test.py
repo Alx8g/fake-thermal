@@ -7,7 +7,7 @@ judges means no judge sees a frame twice.
 
     python scripts/preference_test.py render FRAMES_DIR OUT            # none / uniform / parts
     python scripts/preference_test.py sheets OUT parts:uniform parts:none --judges 6
-    # give each judge scripts/preference_judge_prompt.md + its sheets (judges.json), never key.json
+    # give each judge scripts/pair_judge_prompt.md + its pairs (judges.json), never key.json
     python scripts/preference_test.py score OUT j1.json j2.json ...     # one file per judge
 """
 import argparse
@@ -79,15 +79,19 @@ def sheets(args):
         flip = flips[judge, (first, second)].pop()
         left, right = (second, first) if flip else (first, second)
         a, b = panel(left, frame), panel(right, frame)
-        sheet = Image.new('RGB', (a.width + b.width + 24, args.height + 36), 'white')
-        draw = ImageDraw.Draw(sheet)
-        draw.text((a.width // 2, 10), 'A', fill='black')
-        draw.text((a.width + 24 + b.width // 2, 10), 'B', fill='black')
-        sheet.paste(a, (0, 36))
-        sheet.paste(b, (a.width + 24, 36))
-        # lossless: JPEG chroma subsampling treated the two panels differently and
-        # judges picked whichever side hid the turbo decoder's faint grid
-        sheet.save(folder / f'{number:03d}.png')
+        if args.side_by_side:
+            sheet = Image.new('RGB', (a.width + b.width + 24, args.height + 36), 'white')
+            draw = ImageDraw.Draw(sheet)
+            draw.text((a.width // 2, 10), 'A', fill='black')
+            draw.text((a.width + 24 + b.width // 2, 10), 'B', fill='black')
+            sheet.paste(a, (0, 36))
+            sheet.paste(b, (a.width + 24, 36))
+            sheet.save(folder / f'{number:03d}.png')
+        else:
+            # two files per pair: shown side by side in one image, judges saw the
+            # left panel as grainier even when both panels were the same image
+            a.save(folder / f'{number:03d}_A.png')
+            b.save(folder / f'{number:03d}_B.png')
         assignment.setdefault(f'judge{judge + 1}', []).append(f'{number:03d}')
         key.append({'sheet': f'{number:03d}', 'frame': frame, 'A': left, 'B': right})
     (args.out / 'blind' / 'key.json').write_text(json.dumps(key, indent=1) + '\n')
@@ -143,6 +147,8 @@ def main():
     p.add_argument('--judges', type=int, default=6)
     p.add_argument('--height', type=int, default=640)
     p.add_argument('--seed', type=int, default=5)
+    p.add_argument('--side-by-side', action='store_true',
+                   help='one sheet per pair instead of NNN_A.png and NNN_B.png (judges favour a side)')
     p = commands.add_parser('score')
     p.add_argument('out', type=Path)
     p.add_argument('answers', type=Path, nargs='+', help='one JSON file per judge')

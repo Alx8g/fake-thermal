@@ -18,7 +18,7 @@ training split. This script replaces both:
             spot the fake scores 100%; 50% means indistinguishable.
   prefer    fake-vs-fake sheets: two models' renders of the same held-out frame,
             no real panel, judges pick the one that looks more like a real
-            camera (scripts/scene_judge_prompt.md). Uses the frames where the
+            camera (scripts/pair_judge_prompt.md). Uses the frames where the
             two differ most, so it measures whether a change, where it shows,
             looks better; far more sensitive to small changes than pairs.
   score-prefer  how often each model was preferred, by source and by frame
@@ -177,6 +177,25 @@ def panel(gray, width):
     return Image.fromarray(colored).resize((width, round(h * width / w)), Image.LANCZOS)
 
 
+def save_pair(folder, number, a, b, side_by_side=False):
+    """Write one judged pair: by default two files, NNN_A.png and NNN_B.png
+    (prompt scripts/pair_judge_prompt.md). Shown side by side in one image,
+    judges saw the left panel as grainier even when both panels were the same
+    image, and most of them then picked one side every time."""
+    if not side_by_side:
+        a.save(folder / f'{number:03d}_A.png')
+        b.save(folder / f'{number:03d}_B.png')
+        return
+    sheet = Image.new('RGB', (a.width + b.width + 24, max(a.height, b.height) + 36), 'white')
+    draw = ImageDraw.Draw(sheet)
+    draw.text((a.width // 2, 10), 'A', fill='black')
+    draw.text((a.width + 24 + b.width // 2, 10), 'B', fill='black')
+    sheet.paste(a, (0, 36))
+    sheet.paste(b, (a.width + 24, 36))
+    # lossless: with JPEG the panels' chroma blocks align differently
+    sheet.save(folder / f'{number:03d}.png')
+
+
 def pairs(args):
     rng = random.Random(args.seed)
     stems = test_ids(args.per_source)
@@ -200,14 +219,7 @@ def pairs(args):
         real = crop_to_rgb(stem, real, args.data)
         real_left = rng.random() < .5
         left, right = (real, fake) if real_left else (fake, real)
-        a, b = panel(left, args.width), panel(right, args.width)
-        sheet = Image.new('RGB', (2 * args.width + 24, a.height + 36), 'white')
-        draw = ImageDraw.Draw(sheet)
-        draw.text((args.width // 2, 10), 'A', fill='black')
-        draw.text((args.width + 24 + args.width // 2, 10), 'B', fill='black')
-        sheet.paste(a, (0, 36))
-        sheet.paste(b, (args.width + 24, 36))
-        sheet.save(sheets / f'{number:03d}.png')  # lossless, see prefer()
+        save_pair(sheets, number, panel(left, args.width), panel(right, args.width), args.side_by_side)
         key.append({'sheet': f'{number:03d}', 'model': name, 'frame': stem,
                     'real': 'A' if real_left else 'B'})
     (out / 'key.json').write_text(json.dumps(key, indent=2) + '\n')
@@ -338,15 +350,7 @@ def prefer(args):
             pair = [second, first] if flip else [first, second]
             a, b = (panel(crop_to_rgb(stem, load_gray(ROOT / 'fake' / name / f'{stem}.png'), args.data),
                           args.width) for name in pair)
-            sheet = Image.new('RGB', (2 * args.width + 24, a.height + 36), 'white')
-            draw = ImageDraw.Draw(sheet)
-            draw.text((args.width // 2, 10), 'A', fill='black')
-            draw.text((args.width + 24 + args.width // 2, 10), 'B', fill='black')
-            sheet.paste(a, (0, 36))
-            sheet.paste(b, (args.width + 24, 36))
-            # lossless: with JPEG the panels' chroma blocks align differently and a
-            # faint periodic decoder pattern can show on one side only
-            sheet.save(sheets / f'{number:03d}.png')
+            save_pair(sheets, number, a, b, args.side_by_side)
             key.append({'sheet': f'{number:03d}', 'frame': stem, 'A': pair[0], 'B': pair[1]})
             assignment.setdefault(f'judge{judge}', []).append(f'{number:03d}')
     (out / 'key.json').write_text(json.dumps(key, indent=2) + chr(10))
@@ -423,6 +427,7 @@ def main():
     p.add_argument('--per-source', type=int, default=8)
     p.add_argument('--width', type=int, default=512)
     p.add_argument('--seed', type=int, default=11)
+    p.add_argument('--side-by-side', action='store_true', help='one sheet per pair (biased, see save_pair)')
     p = commands.add_parser('score')
     p.add_argument('--round', required=True)
     p.add_argument('answers', nargs='+')
@@ -446,6 +451,7 @@ def main():
     p.add_argument('--batch', type=int, default=24, help='sheets per judge')
     p.add_argument('--width', type=int, default=512)
     p.add_argument('--seed', type=int, default=17)
+    p.add_argument('--side-by-side', action='store_true', help='one sheet per pair (biased, see save_pair)')
     p = commands.add_parser('score-prefer')
     p.add_argument('--round', required=True)
     p.add_argument('answers', nargs='+')
