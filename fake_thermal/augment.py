@@ -205,14 +205,18 @@ def darken(rgb):
     return np.clip(out, 0, 1).astype(np.float32)
 
 
-def photo_only(rgb, p_light=0., p_print=0., p_dark=0., p_cast=0.):
-    """Apply the augmentations to a float RGB crop; lights are likelier after darkening."""
+def photo_only(rgb, p_light=0., p_print=0., p_dark=0., p_cast=0., cast_day=1.):
+    """Apply the augmentations to a float RGB crop; lights are likelier after darkening.
+
+    ``cast_day`` scales the cast-light probability on daylight photos: at 0, light is
+    only cast onto night scenes (a model trained with it on daytime street scenes
+    learned to warm the sky and darken the road nearest the camera)."""
     # only darken photos that are not already night shots: those are dark enough
     dark = random.random() < p_dark and float(rgb.mean()) > .3
     if dark:
         rgb = darken(rgb)
     night = dark or float(rgb.mean()) < .25
-    if random.random() < (min(1., p_cast * 1.8) if night else p_cast):
+    if random.random() < (min(1., p_cast * 1.8) if night else p_cast * cast_day):
         rgb = add_cast(rgb)
     if random.random() < (min(1., p_light * 1.8) if dark else p_light):
         rgb = add_lights(rgb)

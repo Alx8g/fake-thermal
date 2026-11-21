@@ -166,6 +166,8 @@ def main():
     parser.add_argument('--cast-aug', type=float, default=0.,
                         help='probability of light cast onto surfaces in the photo only (headlight '
                              'beams, street-light pools, spill on walls), likelier on night photos')
+    parser.add_argument('--cast-day', type=float, default=1.,
+                        help='scale on --cast-aug for daylight photos; 0 casts light onto night scenes only')
     parser.add_argument('--decay', choices=['none', 'cosine'], default='none',
                         help='learning-rate decay after warmup; cosine falls to --min-lr-ratio')
     parser.add_argument('--min-lr-ratio', type=float, default=.1)
@@ -229,7 +231,7 @@ def main():
 
     train = TurboPairs(args.data, crop=args.crop,
                        augment={'p_light': args.light_aug, 'p_print': args.print_aug, 'p_dark': args.dark_aug,
-                                'p_cast': args.cast_aug})
+                                'p_cast': args.cast_aug, 'cast_day': args.cast_day})
     batches = iter(DataLoader(train, batch_size=args.batch_size, sampler=train.sampler(args.iters * args.batch_size),
                               num_workers=args.workers, worker_init_fn=seed_worker, pin_memory=True,
                               drop_last=True, persistent_workers=args.workers > 0))
