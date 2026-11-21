@@ -72,6 +72,17 @@ the pattern's local amplitude, and subtracts only that; it changes the heat by
   a grid, checker or mesh on one of the two, they picked the de-striped render
   25 times out of 34 (p about .01).
 
+**Tried and not shipped: lifting the dark disc at night lights.** A dark disc
+or ring where a lamp or traffic light is was one of the most repeated tells in
+r8. Using the light detector from `exp/inference-fixes`, only on night photos
+(mean brightest channel under .25), pixels inside a light's region that were
+colder than the interpolated surrounding heat minus its grain were raised to
+it; nothing was lowered, so glow and grain stayed. On the 48 frames it changed
+most (mostly LLVIP), as separate images, judges preferred the unchanged
+render 106 to 86 (8 judges, none one-sided). The lift also warms things
+that really are cold next to a light: sky seen through a canopy beside a
+street lamp, and the chrome grille between a car's headlights.
+
 ## The night-only cast run (21 Nov 2026, evening)
 
 **Tried and not shipped: cast light on night photos only.** The theory for the
