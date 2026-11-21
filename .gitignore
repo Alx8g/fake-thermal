@@ -7,5 +7,7 @@ prepare.log
 train_mac.log
 **/weights/*.pt
 !fake_thermal/weights/fake_thermal.pt
+!fake_thermal/weights/turbo.pt
 *.egg-info/
 build/
+.working/

@@ -1,5 +1,36 @@
 # Roadmap
 
+## Direction after 20 Nov 2026
+
+Blind tests (docs/EXPERIMENTS.md) settled the main question: no regression
+U-Net, with perceptual, adversarial or sensor-noise additions, survives a
+side-by-side look at real thermal, and none passes as real on its own. A large
+pretrained image model fine-tuned for one-step translation (pix2pix-Turbo on
+SD-Turbo, `--engine turbo`) is the first thing that does: on single frames,
+judges called it generated about as often as real footage. The U-Net stays as
+the fast engine; the turbo engine is the photographic one.
+
+Next, in order of expected value:
+
+1. **Physics tells.** Judges still catch turbo frames side by side because
+   they copy visible-light detail: see-through windscreens (glass is opaque in
+   LWIR), road paint and logos, glare from lit lamps and headlights, and
+   people whose heat follows clothing brightness. Levers: the RGB-conditioned
+   critic (`--pair-gan-weight`), a people/animals-only semantic prior, and
+   training data where these cases are common.
+2. **Data diversity.** Training data is driving, surveillance and night
+   streets from three cameras. Larger aligned RGB-thermal sets exist, e.g.
+   LasHeR (1,224 aligned visible/thermal video pairs, 730K+ frame pairs, far
+   more varied scenes); check each licence before use.
+3. **Video.** Turbo is deterministic per frame (latent mode, no noise), and
+   the motion-compensated smoother still applies, but its temporal stability
+   on real footage has not been measured yet.
+4. **Speed.** Turbo runs ~0.5 frames/s on an M1 Pro. Distilling it into a
+   smaller student, or running it on a rented GPU for long clips, are the
+   options; realtime is out of reach for SD-Turbo-size models on a laptop.
+
+The phases below are the earlier plan (19-20 Nov), kept for the record.
+
 The v1 model predicts a plausible thermal appearance and disclaims thermometry.
 Everything below keeps that positioning. Each phase is independently shippable,
 CI-tested, and justified by published evidence rather than hype; where a claim
@@ -19,7 +50,7 @@ was tested locally, the measured number is stated.
    fused heat-only-raises; training never sees it.
 6. **Temporal blindness.** Single-frame training plus EMA display smoothing.
 
-## Phase 1 — training-quality wins (implemented, ablation pending)
+## Phase 1 — training-quality wins (delivered)
 
 - **Focal Frequency Loss** (`--frequency-alpha`): adaptively weights
   hard-to-synthesize frequency components. Jiang et al., "Focal Frequency Loss
@@ -30,16 +61,25 @@ was tested locally, the measured number is stated.
 - Measured already: fp16 autocast on MPS gains only ~2.5% at this model size;
   channels-last stays ~23% slower than contiguous (see TRAINING.md). Defaults
   unchanged — benchmarks beat assumptions.
+- **Ablation (3k iterations, fp16, batch 16):** frequency loss −1.9% (best
+  arm, improves every source), weight EMA −1.0%, combined within noise of
+  EMA alone. Both are recommended defaults for future runs; numbers and
+  artifacts in TRAINING.md and `outputs/ablation/`.
 
-## Phase 2 — occlusion-masked temporal filtering
+## Phase 2 — occlusion-masked temporal filtering (delivered)
 
 Replace the EMA `TemporalSmoother` with flow-based consistency: forward/back
 optical flow (cv2, low resolution), forward-backward consistency occlusion
 masks, edge-aware propagation of the previous heat map. Pattern from Bonneel
 et al., "Practical Temporal Consistency for Image-Based Graphics Applications",
-SIGGRAPH Asia 2015. Expected: visibly steadier video, no new dependencies.
-RAFT-in-the-loop was considered and deferred: per-frame network cost, warping
-tears at flow errors, and no published metric supporting the claimed gains.
+SIGGRAPH Asia 2015. Static shots take a single-flow shortcut, keeping the
+end-to-end cost within ~2% of plain EMA at 720p. Measured on a controlled
+6 px/frame pan of real footage: motion-compensated output error 5.73 vs 6.05
+gray levels for plain EMA (5.7% more temporally consistent), with zero-motion
+behavior bit-identical to EMA. `--no-flow-smoothing` restores the previous
+blend. RAFT-in-the-loop was considered and deferred: per-frame network cost,
+warping tears at flow errors, and no published metric supporting the claimed
+gains.
 
 ## Phase 3 — FLIR video pair rescue (+3,747 real pairs)
 
@@ -80,6 +120,19 @@ Plan: conditional flow-matching head on the same ResNet18 U-Net backbone,
 bootstrapped from the v1 regression model as teacher; single forward pass at
 inference (CLI latency unchanged); sampling replaces averaging, so night
 ambiguity yields plausible samples rather than a smear.
+
+**Round-one result (honest):** a plain-CFM FlowUNet warmstarted from the v1
+teacher reached one-step validation L1 0.34 against the teacher's 0.17 after
+11.5k iterations at batch 4, with the validation curve flat after ~7k.
+Multi-step Euler sampling does not close the gap (1-step 0.343, 2-step 0.345,
+4-step 0.349, 8-step 0.352): integration granularity is not the bottleneck —
+the velocity field itself is underfit at this compute budget, consistent
+with MeanFlow's own finding that plain flow matching degrades under single-
+step sampling. Remaining paths: the MeanFlow JVP consistency term
+(arXiv:2505.13447), which is the actual mechanism behind working one-step
+sampling, with a longer schedule and the v2 regression model as warmstart
+teacher; or a shortcut-style teacher-to-data interpolation. Checkpoints and
+log: `outputs_flow/`.
 
 ## Phase 6 (research) — domain expansion
 

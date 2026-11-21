@@ -64,6 +64,69 @@ keys. Older checkpoints without precision/layout keys resume as fp32/auto.
 Resuming a completed run is a safe no-op; rerunning without `--resume` starts a
 new run and overwrites prior artifacts.
 
+### Realism training options
+
+`--gan-weight` and `--fm-weight` (default 0, off) add a conditional
+multi-scale PatchGAN critic (`fake_thermal/discriminator.py`, hinge loss,
+spectral norm) and pix2pixHD feature matching on its activations. The critic
+and its optimizer are checkpointed, so adversarial runs resume. Feature-matching
+values are small (~0.01), so useful weights are around 10; `--d-lr` sets the
+critic learning rate (default 2e-4).
+
+`--fullres` adds a small full-resolution RGB feature path into the head.
+Without it the finest features the head sees are a bilinear upsample of the
+stride-2 decoder output, which caps pixel-level detail. `--init` warm-starts
+from a checkpoint (EMA weights preferred) or an exported state dict; a model
+without the full-resolution path loads into one with it and reproduces its
+output exactly, because the new head inputs start at zero.
+
+`--precision bf16` enables bfloat16 autocast on CUDA (safer than fp16 for
+adversarial training). On CUDA, cuDNN autotuning and TF32 are enabled.
+
+`--workers` defaults to the CPU count minus two (at most 16). Augmenting one
+448px sample costs ~19 ms of CPU on an M1 Pro core and more on rented vCPUs;
+with the old default of two workers, rented RTX 4090s sat at roughly a third
+of their speed waiting for images. Training targets are dequantized (uniform
++-0.5 grey level) before the percentile stretch so a critic cannot tell real
+from generated thermal by the 8-bit value lattice.
+
+`--snapshot-every N` also saves fp16 copies of the evaluated weights to
+`snapshots/iter_N.pt`, so mid-run models survive and can be compared.
+
+### pix2pix-Turbo (SD-Turbo, one step)
+
+`scripts/train_turbo.py` fine-tunes pix2pix-Turbo (Parmar et al. 2024; adapted
+in `fake_thermal/turbo.py`) on the same paired data: LoRA adapters on SD-Turbo's
+UNet and VAE, VAE skip connections, L2 + 5 x LPIPS(VGG) reconstruction and a
+CLIP-feature (vision-aided) discriminator at weight 0.5. It needs
+`diffusers transformers peft vision-aided-loss "setuptools<81"` and OpenAI's
+`clip` package, and downloads SD-Turbo (~5 GB). At batch 2 and 512px it needs
+about 15 GB of GPU memory with activation checkpointing (`--no-checkpointing`
+overflows 24 GB) and runs ~1.05 s/step on an RTX 4090. `--init` continues from
+saved weights; `--ids outputs/realism/ids.json` renders the held-out realism
+frames when training ends.
+
+### Rented GPUs
+
+`scripts/vast_fleet.py` runs on the machine holding the Vast API key and the
+prepared data:
+
+```sh
+python scripts/vast_fleet.py up --offer <id> --label run1          # rent, wait for ssh
+python scripts/vast_fleet.py push --label run1                     # code + data512, 6 rsync streams
+python scripts/vast_fleet.py launch --label run1 --arm gan -- --precision bf16 ...
+python scripts/vast_fleet.py launch --label run1 --arm next --after gan -- ...
+python scripts/vast_fleet.py watch --label run1 --floor 0.5 --max-hours 5
+```
+
+`watch` pulls snapshots, grids, logs and rendered frames as runs progress,
+pulls final checkpoints when a run ends, destroys the box once every run on it
+has ended (unless `outputs/vast/<label>.hold` exists), and destroys every box
+when account credit reaches `--floor`. One stream through Vast's ssh relay
+moved ~3 MB/s from the Mac; six parallel rsyncs reached ~11 MB/s. Do not push
+with macOS `tar`: it adds `._` AppleDouble files that the loader reads as an
+extra data source.
+
 With a benchmark batch override, all 50 steps use that batch; otherwise 25
 steps each at 2 and 4 are compared. Install the appropriate platform PyTorch
 wheel for accelerators. Larger crops do not add detail to existing 288px-short-
@@ -191,3 +254,114 @@ slower than contiguous on MPS even with PyTorch 2.15's Metal backward path —
 the defaults (fp32/contiguous on MPS) stay. End-to-end CLI throughput on the
 same machine (640×512 input, working size 384, x264 crf 18): **12.3 fps** with
 the semantic prior, **21.3 fps** without (`--no-semantic`).
+
+### Loss-configuration ablation (3,000 iterations, fp16, batch 16)
+
+| Configuration | Best validation L1 | Δ vs base |
+| --- | ---: | ---: |
+| base (L1 + SSIM + gradient) | 0.187308 | — |
+| + focal frequency (`--frequency-alpha 1`) | **0.183800** | −1.9% |
+| + weight EMA (`--ema-decay 0.999`) | 0.185505 | −1.0% |
+| + both | 0.185551 | −0.9% |
+
+The frequency loss is the clear short-run win, improving every source; EMA
+also improves checkpointed weights within 3k iterations, though its benefit
+compounds on full schedules (the shipped 30k run peaked at iteration 17,500 —
+EMA checkpointing exists to smooth exactly that). The combined arm shows no
+additive gain at this length, within run-to-run noise of EMA alone. Future
+runs use `--frequency-alpha 1 --ema-decay 0.999`. Artifacts:
+`outputs/ablation/{base,ffl,ema,both}/`.
+
+### Style-conditioning A/B (same protocol, FFL+EMA both on)
+
+| Configuration | Best validation L1 |
+| --- | ---: |
+| FFL + EMA | 0.185551 |
+| + `--conditioning` | **0.183667** (−1.0%) |
+
+FLIR improved most (0.1863 → 0.1752, −6%) while night-time LLVIP slightly
+regressed (0.2265 → 0.2321): consistent with the night analysis — the FiLM
+head helps where RGB carries recoverable signal and cannot add what dark
+frames lack. Conditioned runs are recommended for day-domain accuracy;
+unconditioned remains reasonable where night performance dominates.
+Artifacts: `outputs/cond/`.
+
+### v3: 512px-native data, crop 448 (the resolution run)
+
+Prepared the datasets at 512px short side (native thermal resolution for the
+FLIR video recordings; `data512/`), re-registered the video pairs at native
+640x512, and trained 20,000 iterations at crop 448 with focal frequency loss,
+weight EMA and conditioning. **Best validation L1 0.164636** (EMA, iteration
+14,500), improving every source against the incumbent (FLIR 0.1418, KAIST
+0.1430, LLVIP 0.2095) — though the different crop/resolution regime makes
+this not directly comparable to the 256-crop numbers above.
+
+**The photorealism diagnosis** (Luna-verified side-by-sides plus a CNN patch
+classifier, `scripts/evaluate_realism.py`): validation L1 rewards blur —
+L1-optimal prediction is the conditional mean — and v3 is measurably
+*smoother* than v1 (output texture 0.2-0.4 vs real ~779-2857 Laplacian
+variance). The deployed pipeline (guided edge transfer + sensor simulation)
+reaches 584 vs real 779 texture on FLIR/LLVIP samples; the classifier still
+separates real from fake at 94.2% on 512-native patches. Luna's verdict:
+past the "blobs" stage, scene layout surviving, but still distinguishable by
+missing scene-aligned high-frequency structure. **v4 adds the perceptual
+loss (`--lpips-alpha 0.25`)** to break the L1-blur equilibrium; the realism
+benchmark, not validation L1, is the metric of record for this campaign.
+Artifacts: `outputs/realism_v3.json`, `outputs/morning_v3.png`, `outputs/v3/`.
+
+### v4: perceptual training loss (the realism campaign's metric of record)
+
+20,000 iterations at 448-crop on 512px data, identical to v3 plus
+`--lpips-alpha 0.25` (LPIPS-AlexNet added to the loss). Results:
+
+| Metric | v3 | v4 |
+| --- | ---: | ---: |
+| LPIPS on the 512px val split | 0.7727 | **0.4794** (−38%) |
+| Raw model output texture (Laplacian var) | ~0.4 | **15.4** |
+| Validation L1 | 0.1646 | 0.1666 |
+| Real-vs-fake classifier (deployed pipeline) | 94.2% | 95.5% |
+
+The perceptual loss works — LPIPS dropped 38% and the model's own output
+gained ~40x texture — but at this weight and schedule it does not yet close
+the visual gap (Luna: "visibly better, still clearly distinguishable; the
+missing piece is scene-aligned structural detail"). EMA checkpointing does
+not blur the gain (EMA 15.0 vs raw 15.4), and the guided edge-transfer stage
+is not the bottleneck (classifier identical with or without it). Remaining
+levers: perceptual weight (0.5/1.0) and schedule length (50k), packaged as
+the v5 arms in `scripts/cloud_run.py`. Artifacts: `outputs/eval_v4.json`,
+`outputs/realism_v4.json`, `outputs/morning_v4.png`, `outputs/v4/`.
+
+### Full-length recipe comparison (v2, 30k iterations)
+
+The v2 run stacked every validated ingredient — focal frequency loss, weight
+EMA, style conditioning and the 3,193 rescued video pairs — on the same
+256-crop/288px protocol as the shipped incumbent:
+
+| Model | Validation L1 | LPIPS (AlexNet) |
+| --- | ---: | ---: |
+| incumbent (plain L1+SSIM+gradient) | **0.169593** | **0.6535** |
+| v2 (FFL + EMA + conditioning + video) | 0.171092 | 0.6688 |
+
+The short-run ablation gains did not stack at full length: EMA checkpointing
+lags late-run improvements, conditioning trades KAIST accuracy for FLIR/LLVIP,
+and the daytime-heavy video pairs shift the source balance. **The incumbent
+remains the packaged model at this scale.** The decisive next lever is
+resolution: v3 trains on 512px-native data (including the video pairs
+re-registered at native 640x512 thermal) at crop 448, evaluated at its
+deployment resolution via the realism benchmark (scripts/evaluate_realism.py).
+Artifacts: `outputs/eval_v2.json`, `outputs/v2/`.
+
+### FLIR video pair rescue (Phase 3 full pass)
+
+3,405 of the 3,747 excluded unaligned video frames (90.8%) registered
+successfully under the 0.30 residual gate and were saved to
+`data/pairs-video/` (residuals p50=0.16, p90=0.29). **Two-round visual QA**
+(full-resolution overlay crops judged independently): the clean recordings
+pass 12/12 judgeable crops with no systematic offset, scale or rotation
+residue; the recording `video-msNEBxJE5PPDqenBM` failed throughout (0/6,
+49% gate pass) and was **excluded** (moved to `data/pairs-video-rejected/`).
+The remaining **3,193 pairs are integrated into `data/pairs/train/`** with
+the `video_` source prefix — the balanced sampler weights them as one
+source alongside FLIR/KAIST/LLVIP. QA artifacts:
+`outputs/rescue_overlay_blink.mp4`, `outputs/rescue_zoom.png`,
+`outputs/rescue_fringe.png`.

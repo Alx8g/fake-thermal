@@ -16,6 +16,7 @@ from tqdm import tqdm
 from fake_thermal.model import ThermalUNet
 from fake_thermal.device import DEVICES, memory_format, select_device
 from fake_thermal.semantic import SemanticPrior, fuse_heat, guided_upsample
+from fake_thermal.sensor import ThermalSensor
 
 DEFAULT_WEIGHTS = Path(__file__).resolve().parent / 'weights/fake_thermal.pt'
 UNREADABLE_MEDIA = "Couldn't read this file as a video or image — try an MP4/MOV/JPG/PNG."
@@ -25,6 +26,8 @@ PALETTES = {
     'ironbow': [(0, 0, 0), (35, 0, 80), (135, 12, 90), (230, 60, 20), (255, 190, 30), (255, 255, 235)],
     'rainbow': [(0, 0, 90), (0, 50, 255), (0, 240, 220), (100, 255, 0), (255, 220, 0), (255, 20, 0)],
     'arctic': [(0, 0, 25), (20, 30, 120), (0, 150, 220), (110, 235, 255), (255, 255, 255)],
+    'lava': [(0, 0, 0), (40, 0, 60), (150, 10, 10), (230, 90, 10), (255, 170, 40), (255, 240, 170)],
+    'glowbow': [(10, 0, 60), (70, 20, 140), (160, 40, 130), (220, 90, 60), (255, 170, 40), (255, 230, 140)],
 }
 
 
@@ -37,23 +40,95 @@ def apply_palette(heat, palette):
 
 
 class TemporalSmoother:
-    def __init__(self, smoothing=.65, cut_threshold=.22):
+    def __init__(self, smoothing=.65, cut_threshold=.22, flow=True, tolerance=1.5):
         if not 0 <= smoothing < 1:
             raise ValueError('Smoothing must be in [0, 1)')
         self.smoothing, self.threshold = smoothing, cut_threshold
-        self.previous, self.scene = None, None
+        self.flow, self.tolerance = flow, tolerance
+        self.previous, self.scene, self.scene_gray = None, None, None
         self.reset_history = True
 
     def update(self, heat, rgb):
         scene = cv2.resize(rgb, (64, 64), interpolation=cv2.INTER_AREA).astype(np.float32) / 255
         cut = self.scene is not None and np.abs(scene - self.scene).mean() > self.threshold
         self.reset_history = self.previous is None or cut or self.previous.shape != heat.shape
+        current = None
+        if self.flow:
+            small = cv2.resize(rgb, flow_grid(heat.shape), interpolation=cv2.INTER_AREA)
+            current = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
         if self.reset_history:
             result = heat.copy()
-        else:
+        elif not self.flow:
             result = self.smoothing * self.previous + (1 - self.smoothing) * heat
+        else:
+            result = self.propagate(heat, current, self.scene_gray)
         self.previous, self.scene = result, scene
+        self.scene_gray = current
         return result
+
+    def carry(self, rgb):
+        """The previous heat map carried along the estimated motion to this frame,
+        with no new prediction (``--stride``); None when there is no history, the
+        scene cut or flow smoothing is off, so the caller must predict."""
+        if self.previous is None or not self.flow:
+            return None
+        scene = cv2.resize(rgb, (64, 64), interpolation=cv2.INTER_AREA).astype(np.float32) / 255
+        if np.abs(scene - self.scene).mean() > self.threshold:
+            return None
+        small = cv2.resize(rgb, flow_grid(self.previous.shape), interpolation=cv2.INTER_AREA)
+        current = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
+        h, w = self.previous.shape
+        back = optical_flow(current, self.scene_gray)
+        gx, gy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+        scale = np.float32([w / back.shape[1], h / back.shape[0]])
+        back_full = cv2.resize(back, (w, h), interpolation=cv2.INTER_LINEAR) * scale
+        result = cv2.remap(self.previous, gx + back_full[..., 0], gy + back_full[..., 1],
+                           interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        self.previous, self.scene, self.scene_gray = result, scene, current
+        self.reset_history = False
+        return result
+
+    def propagate(self, heat, current, previous):
+        """Blend the previous heat map carried along the estimated motion field."""
+        h, w = heat.shape
+        back = optical_flow(current, previous)
+        magnitude = np.hypot(back[..., 0], back[..., 1])
+        if float(magnitude.max()) < .5:
+            mask = np.ones_like(magnitude, np.float32)
+        else:
+            fore = optical_flow(previous, current)
+            mask = consistent_mask(back, fore, self.tolerance)
+        gx, gy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+        scale = np.float32([w / back.shape[1], h / back.shape[0]])
+        back_full = cv2.resize(back, (w, h), interpolation=cv2.INTER_LINEAR) * scale
+        x = gx + back_full[..., 0]
+        y = gy + back_full[..., 1]
+        inside = ((x >= 0) & (x <= w - 1) & (y >= 0) & (y <= h - 1)).astype(np.float32)
+        warped = cv2.remap(self.previous, x, y, interpolation=cv2.INTER_LINEAR,
+                           borderMode=cv2.BORDER_REPLICATE)
+        alpha = self.smoothing * (cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR) * inside)
+        return alpha * warped + (1 - alpha) * heat
+
+
+def flow_grid(shape):
+    """Quarter-resolution (width, height) used for motion estimation."""
+    h, w = shape
+    return max(w // 4, 32), max(h // 4, 32)
+
+
+def optical_flow(source, target):
+    """Farneback displacement field taking pixels of `source` to `target`."""
+    return cv2.calcOpticalFlowFarneback(source, target, None, .5, 3, 21, 3, 5, 1.2, 0)
+
+
+def consistent_mask(back, fore, tolerance=1.5):
+    """Forward-backward consistency: reliable where the round trip is short."""
+    h, w = back.shape[:2]
+    gx, gy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    x = np.clip((gx + back[..., 0]).round().astype(int), 0, w - 1)
+    y = np.clip((gy + back[..., 1]).round().astype(int), 0, h - 1)
+    trip = np.hypot(back[..., 0] + fore[y, x, 0], back[..., 1] + fore[y, x, 1])
+    return (trip <= tolerance).astype(np.float32)
 
 
 class DisplayNormalizer:
@@ -128,9 +203,8 @@ class Predictor:
         cv2.setNumThreads(1)
         self.size = size
         self.device = select_device(device)
-        self.model = ThermalUNet(pretrained=False).eval()
         state = torch.load(weights, map_location='cpu', weights_only=True)
-        self.model.load_state_dict(state, strict=True)
+        self.model = ThermalUNet.from_state(state).eval()
         self.model.to(device=self.device, dtype=torch.float32, memory_format=memory_format(self.device))
 
     @torch.inference_mode()
@@ -141,6 +215,64 @@ class Predictor:
         x = torch.from_numpy(small.copy()).permute(2, 0, 1).unsqueeze(0).float() / 255
         x = x.to(self.device, memory_format=memory_format(self.device))
         return self.model(x)[0, 0].cpu().numpy()
+
+
+DEFAULT_TURBO_WEIGHTS = Path(__file__).resolve().parent / 'weights/turbo.pt'
+ENGINES = ('unet', 'turbo')
+
+
+class TurboPredictor:
+    """pix2pix-Turbo engine: one SD-Turbo denoising step per frame. Much more
+    photographic than the U-Net, much slower; needs the optional diffusers,
+    transformers and peft packages and downloads SD-Turbo (~5 GB) on first use."""
+
+    def __init__(self, weights=DEFAULT_TURBO_WEIGHTS, size=512, device='auto', skip=1., destripe=True):
+        if size < 64:
+            raise ValueError('Working short side must be at least 64')
+        try:
+            from fake_thermal.turbo import Pix2PixTurbo
+        except ImportError as error:
+            raise RuntimeError('The turbo engine needs: pip install diffusers transformers peft') from error
+        if not Path(weights).is_file():
+            raise FileNotFoundError(f'Turbo weights not found: {weights}')
+        self.size, self.skip, self.destripe = size, skip, destripe
+        self.device = select_device(device)
+        self.net = Pix2PixTurbo(device=self.device, weights=weights)
+        self.net.set_eval()
+        self.dtype = torch.float16 if self.device.type in ('cuda', 'mps') else None
+        if self.device.type == 'mps':
+            self.net.half()  # faster than autocast on Apple GPUs
+
+    def __call__(self, rgb):
+        h, w = rgb.shape[:2]
+        scale = self.size / min(h, w)
+        if scale < 1:
+            rgb = cv2.resize(rgb, (round(w * scale), round(h * scale)), interpolation=cv2.INTER_AREA)
+        heat = self.net.translate(rgb, dtype=self.dtype, skip=self.skip)
+        return remove_stripes(heat) if self.destripe else heat
+
+
+def remove_stripes(heat, sigma=3.):
+    """Remove alternating-row and alternating-column patterns (period 2 pixels).
+
+    turbo's decoder leaves far more of this than real thermal frames have; upsampled
+    to video size or resized for viewing it shows as fine stripes or a mesh. Each
+    pattern is demodulated to zero frequency, its local amplitude taken with a
+    Gaussian blur, and only that is subtracted, so other texture is kept."""
+    heat = heat.astype(np.float32)
+    rows = np.where(np.arange(heat.shape[0]) % 2, -1, 1).astype(np.float32)[:, None]
+    columns = np.where(np.arange(heat.shape[1]) % 2, -1, 1).astype(np.float32)[None, :]
+    for sign in (rows, columns):
+        heat = heat - sign * cv2.GaussianBlur(heat * sign, (0, 0), sigma)
+    return np.clip(heat, 0, 1)
+
+
+def resize_upsample(heat, rgb):
+    """Plain bicubic upsampling for engines that already synthesize texture;
+    the guided filter would smooth it away."""
+    if heat.shape == rgb.shape[:2]:
+        return heat.astype(np.float32)
+    return np.clip(cv2.resize(heat, (rgb.shape[1], rgb.shape[0]), interpolation=cv2.INTER_CUBIC), 0, 1)
 
 
 def encoder(path, w, h, fps):
@@ -163,7 +295,8 @@ def mux_audio(video, original, output):
 
 def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=False,
             weights=DEFAULT_WEIGHTS, smoothing=.65, raw=False, threads=2,
-            semantic=True, semantic_strength=.7, device='auto', auto_contrast=True):
+            semantic=True, semantic_strength=.7, device='auto', auto_contrast=True,
+            flow=True, sensor=True, engine='unet', turbo_weights=DEFAULT_TURBO_WEIGHTS, stride=1):
     start = time.perf_counter()
     source, output = Path(input_path), Path(output_path)
     if source.resolve() == output.resolve():
@@ -172,12 +305,29 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
         raise FileNotFoundError(source)
     if palette not in PALETTES:
         raise ValueError(f'Unknown palette: {palette}')
+    if engine not in ENGINES:
+        raise ValueError(f'Unknown engine: {engine}')
     if not np.isfinite(semantic_strength) or not 0 <= semantic_strength <= 1:
         raise ValueError('Semantic strength must be between 0 and 1')
-    smoother = TemporalSmoother(smoothing)
+    if stride < 1:
+        raise ValueError('Stride must be at least 1')
+    smoother = TemporalSmoother(smoothing, flow=flow)
     selected_device = select_device(device)
-    predictor = Predictor(weights, size, threads, selected_device.type)
-    semantic_predictor = SemanticPrior(device=selected_device.type) if semantic and semantic_strength > 0 else None
+    sensor_sim = ThermalSensor() if sensor else None
+    if engine == 'turbo':
+        predictor = TurboPredictor(turbo_weights, size, selected_device.type)
+        upsample = resize_upsample
+    else:
+        predictor = Predictor(weights, size, threads, selected_device.type)
+        upsample = guided_upsample
+    # With turbo the prior only warms people and animals: its vehicle classes made
+    # parked cars glow and its colour heuristic made lit lamps glow, both tells.
+    unet = engine == 'unet'
+    # People large enough to segment get skin/clothing/hair levels instead of
+    # one uniform heat, which made whole suits glow like faces (needs mediapipe).
+    semantic_predictor = (SemanticPrior(device=selected_device.type, emissive=unet, vehicles=unet,
+                                        sharp=not unet, parts=True)
+                          if semantic and semantic_strength > 0 else None)
     normalizer = DisplayNormalizer() if auto_contrast else None
 
     def predict_heat(rgb):
@@ -200,7 +350,9 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
         raw_path = output.with_name(output.stem + '_raw.png') if raw else None
         if raw_path is not None and source.resolve() == raw_path.resolve():
             raise ValueError('Input and raw output must be different files')
-        heat = guided_upsample(predict_heat(rgb), rgb)
+        heat = upsample(predict_heat(rgb), rgb)
+        if sensor_sim is not None:
+            heat = sensor_sim.update(heat)
         colored = apply_palette(normalizer.update(heat) if normalizer else heat, palette)
         Image.fromarray(np.concatenate([rgb, colored], axis=1) if side_by_side else colored).save(output)
         if raw:
@@ -231,8 +383,11 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
                             if len(buffer) != w * h * 3:
                                 raise ValueError(UNREADABLE_MEDIA)
                             rgb = np.frombuffer(buffer, dtype=np.uint8).reshape(h, w, 3)
-                            heat = smoother.update(predict_heat(rgb), rgb)
-                            heat = guided_upsample(heat, rgb)
+                            carried = smoother.carry(rgb) if frames % stride else None
+                            heat = carried if carried is not None else smoother.update(predict_heat(rgb), rgb)
+                            heat = upsample(heat, rgb)
+                            if sensor_sim is not None:
+                                heat = sensor_sim.update(heat)
                             display = normalizer.update(heat, reset=smoother.reset_history) if normalizer else heat
                             colored = apply_palette(display, palette)
                             enc.stdin.write((np.concatenate([rgb, colored], axis=1) if side_by_side else colored).tobytes())
@@ -278,23 +433,41 @@ def main():
     parser.add_argument('input', type=Path)
     parser.add_argument('-o', '--output', type=Path, required=True)
     parser.add_argument('--palette', choices=PALETTES, default='ironbow')
-    parser.add_argument('--size', type=int, default=384, help='working short side (default 384)')
+    parser.add_argument('--engine', choices=ENGINES, default='unet',
+                        help='unet: fast small model (default); turbo: SD-Turbo one-step model, '
+                             'far more photographic, slower, needs diffusers/transformers/peft')
+    parser.add_argument('--turbo-weights', type=Path, default=DEFAULT_TURBO_WEIGHTS)
+    parser.add_argument('--size', type=int, default=None,
+                        help='working short side (default 384 for unet, 512 for turbo)')
     parser.add_argument('--side-by-side', action='store_true')
     parser.add_argument('--weights', type=Path, default=DEFAULT_WEIGHTS)
     parser.add_argument('--smoothing', type=float, default=.65, help='previous-frame weight, [0,1); 0 disables')
     parser.add_argument('--raw', action='store_true')
     parser.add_argument('--threads', type=int, default=2)
     parser.add_argument('--semantic', action=argparse.BooleanOptionalAction, default=True,
-                        help='semantic/emissive heat prior (default on; downloads weights on first use)')
+                        help='semantic heat prior (default on; with turbo it warms only people and animals)')
     parser.add_argument('--semantic-strength', type=float, default=.7, help='prior strength, 0 to 1 (default .7)')
     parser.add_argument('--device', choices=DEVICES, default='auto', help='auto selects CUDA, then MPS, then CPU')
     parser.add_argument('--auto-contrast', action=argparse.BooleanOptionalAction, default=True,
                         help='temporally stable percentile display contrast (default on; raw is unaffected)')
+    parser.add_argument('--flow-smoothing', action=argparse.BooleanOptionalAction, default=True,
+                        help='carry the previous heat map along estimated motion with occlusion masking (default on)')
+    parser.add_argument('--stride', type=int, default=1,
+                        help='run the model on every Nth video frame and carry the heat map along the '
+                             'estimated motion in between; 2 nearly halves turbo render time, fast motion '
+                             'can smear (default 1: every frame)')
+    parser.add_argument('--sensor-sim', action=argparse.BooleanOptionalAction, default=None,
+                        help='simulated microbolometer noise, banding and vignette (default on for unet, '
+                             'off for turbo, which synthesizes its own sensor texture)')
     args = parser.parse_args()
+    unet = args.engine == 'unet'
+    args.size = args.size or (384 if unet else 512)
+    args.sensor_sim = unet if args.sensor_sim is None else args.sensor_sim
     try:
         convert(args.input, args.output, args.palette, args.size, args.side_by_side,
                 args.weights, args.smoothing, args.raw, args.threads,
-                args.semantic, args.semantic_strength, args.device, args.auto_contrast)
+                args.semantic, args.semantic_strength, args.device, args.auto_contrast,
+                args.flow_smoothing, args.sensor_sim, args.engine, args.turbo_weights, args.stride)
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
         parser.exit(1, f'fake-thermal: {error}\n')
 
