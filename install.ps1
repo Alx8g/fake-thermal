@@ -27,3 +27,4 @@ if ($SkipPlugins) { $arguments += '--skip-plugins' }
 if ($Uninstall) { $arguments += '--uninstall' }
 & "$root\venv\Scripts\python.exe" @arguments
 if ($LASTEXITCODE) { throw 'Installation failed' }
+if ($Uninstall) { Remove-Item -LiteralPath $root -Recurse -Force }

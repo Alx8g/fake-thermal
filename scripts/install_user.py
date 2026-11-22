@@ -19,7 +19,10 @@ def run(*args):
 
 def download(url, path):
     print('Downloading ' + url, flush=True)
-    urllib.request.urlretrieve(url, path)
+    if sys.platform == 'darwin':
+        run('curl', '-fLsS', '--retry', '3', url, '-o', path)
+    else:
+        urllib.request.urlretrieve(url, path)
 
 
 def main():
@@ -58,11 +61,7 @@ def main():
                 print('Remove with administrator privileges: ' + str(path))
         premiere = (Path(os.environ['APPDATA']) if windows else Path.home() / 'Library/Application Support') / 'Adobe/CEP/extensions/com.alx8g.fakethermal.panel'
         shutil.rmtree(premiere, ignore_errors=True)
-        # Windows cannot remove the interpreter currently executing this script.
-        if windows:
-            command = 'ping 127.0.0.1 -n 4 >nul & rmdir /s /q "{}"'.format(root)
-            subprocess.Popen(['cmd.exe', '/c', command], creationflags=subprocess.CREATE_NO_WINDOW, close_fds=True)
-        else:
+        if not windows:
             shutil.rmtree(root)
         print('Uninstalled fake-thermal (shared model caches and CEP debug settings retained).')
         return
