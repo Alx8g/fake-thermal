@@ -46,6 +46,7 @@ class CameraPromptTests(unittest.TestCase):
         self.assertEqual(source_prompt('llvip_190367'), CAMERA_PROMPTS['llvip'])
         self.assertEqual(source_prompt('video_000123'), CAMERA_PROMPTS['flir'])  # same FLIR camera
         self.assertEqual(source_prompt('flir_07438'), CAMERA_PROMPTS['flir'])
+        self.assertEqual(source_prompt('sf_001_1_2_5_86_0040'), CAMERA_PROMPTS['sf'])  # SpeakingFaces
 
     def test_training_prompts_with_dropout(self):
         from train_turbo import prompts_for

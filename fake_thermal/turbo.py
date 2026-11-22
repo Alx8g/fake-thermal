@@ -25,8 +25,9 @@ PROMPT = 'a thermal infrared camera image, white hot'
 # camera's look instead of an average of all of them; PROMPT stays the generic one.
 CAMERA_PROMPTS = {'flir': PROMPT + ', FLIR ADAS vehicle camera',
                   'kaist': PROMPT + ', KAIST multispectral vehicle rig',
-                  'llvip': PROMPT + ', LLVIP street surveillance camera'}
-SOURCE_CAMERA = {'flir': 'flir', 'video': 'flir', 'kaist': 'kaist', 'llvip': 'llvip'}
+                  'llvip': PROMPT + ', LLVIP street surveillance camera',
+                  'sf': PROMPT + ', FLIR T540 handheld camera, indoor portrait'}
+SOURCE_CAMERA = {'flir': 'flir', 'video': 'flir', 'kaist': 'kaist', 'llvip': 'llvip', 'sf': 'sf'}
 PEFT_DEFAULT_ALPHA = 8
 
 

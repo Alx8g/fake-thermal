@@ -187,6 +187,7 @@ them against an existing active run. Export only trusted local checkpoints.
 | LLVIP | [Original LLVIP project](https://github.com/bupt-ai-cz/LLVIP); [jsonhash mirror](https://huggingface.co/datasets/jsonhash/LLVIP) | Paired low-light images; official train/test split; non-commercial terms. |
 | KAIST Multispectral Pedestrian | [KAIST benchmark](https://soonminhwang.github.io/rgbt-ped-detection/); [AmineMarnissi mirror](https://huggingface.co/datasets/AmineMarnissi/ThermalKaist) | Day/night sequences; sparse mirror subsampled by sequence; held-out whole sets. Mirror declares `other`, not a permissive grant. |
 | FLIR ADAS | [FLIR dataset and terms](https://www.flir.com/oem/adas/adas-dataset-form/); [jsonhash aligned mirror](https://huggingface.co/datasets/jsonhash/FLIR_aligned) | Approximately registered pairs with residual mismatch; inferred split does not certify scene-disjointness. |
+| SpeakingFaces | Abdrakhmanova et al., [Sensors 21(10):3465, 2021](https://www.mdpi.com/1424-8220/21/10/3465); [ISSAI](https://issai.nu.edu.kz/download-speaking-faces/); [Hugging Face](https://huggingface.co/datasets/issai/Speaking_Faces) | Close-up faces, still and speaking, FLIR T540 with the dataset's aligned webcam frames; CC BY 4.0. `scripts/fetch_speakingfaces.py` samples frames by byte range; official subject split (1-100 train, 101-142 held out). |
 
 Please cite the original dataset publications when using them and consult each
 upstream license. Public mirrors do not grant additional rights. No training
