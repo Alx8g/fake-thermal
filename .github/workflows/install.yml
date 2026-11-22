@@ -13,6 +13,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare writable Resolve LUT folder on macOS
+        if: runner.os == 'macOS'
+        run: |
+          sudo mkdir -p "/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT"
+          sudo chown "$(id -un)" "/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT"
       - name: Install macOS
         if: runner.os == 'macOS'
         env:
@@ -24,6 +29,8 @@ jobs:
         run: ./install.ps1 -Source $pwd.Path
       - name: Verify macOS in a fresh shell
         if: runner.os == 'macOS'
+        env:
+          FAKE_THERMAL_SOURCE: ${{ github.workspace }}
         run: |
           export PATH="$HOME/.local/bin:$PATH"
           command -v fake-thermal
@@ -34,6 +41,9 @@ jobs:
           test ! -e "$root"
           test ! -e "$HOME/.local/bin/fake-thermal"
           test ! -e "$HOME/.fake-thermal-resolve.json"
+          test ! -e "/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT/Fake Thermal"
+          test ! -e "$HOME/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility/Fake Thermal Render.py"
+          test ! -e "$HOME/Library/Application Support/Adobe/CEP/extensions/com.alx8g.fakethermal.panel"
       - name: Verify Windows in a fresh shell
         if: runner.os == 'Windows'
         shell: powershell
@@ -49,3 +59,7 @@ jobs:
           Start-Sleep -Seconds 8
           if (Test-Path $root) { throw 'Install root retained' }
           if (Test-Path "$HOME\.fake-thermal-resolve.json") { throw 'Resolve config retained' }
+          if (Test-Path "$env:PROGRAMDATA\Blackmagic Design\DaVinci Resolve\Support\LUT\Fake Thermal") { throw 'DCTL retained' }
+          if (Test-Path "$env:APPDATA\Blackmagic Design\DaVinci Resolve\Support\Fusion\Scripts\Utility\Fake Thermal Render.py") { throw 'Resolve script retained' }
+          if (Test-Path "$env:APPDATA\Adobe\CEP\extensions\com.alx8g.fakethermal.panel") { throw 'Premiere panel retained' }
+          if (([Environment]::GetEnvironmentVariable('Path','User')).Split(';') -contains "$root\venv\Scripts") { throw 'PATH entry retained' }
