@@ -106,6 +106,42 @@ overflows 24 GB) and runs ~1.05 s/step on an RTX 4090. `--init` continues from
 saved weights; `--ids outputs/realism/ids.json` renders the held-out realism
 frames when training ends.
 
+#### Visible-detail consistency (experimental)
+
+Fine-tune a separate checkpoint with `--appearance-weight .3` and compare
+with a run from the same initialization and seed at `--appearance-weight 0`.
+On every fourth optimizer step (`--appearance-every`), a second pass gets the same RGB crop with one
+visible-only edit. The extra loss is weighted toward changed pixels and
+compares against the unchanged thermal target and, more lightly, the
+detached original prediction. Unedited RGB/thermal pairs still train the
+base objective. No extra model, checkpoint format or inference pass is needed.
+For a small L2-only smoke run, use `--lambda-lpips 0 --lambda-gan 0` to
+skip loading both feature networks; this is not the production training recipe.
+
+Glare and print (text, logos or road markings) use synthetic edits out of the
+box. For glass and clothing, provide aligned 8-bit grayscale masks with white
+pixels on the glass or fabric only:
+`pairs/{train,val}/physics/{glass,clothing}/<stem>.png`. Mark the material
+interior; leave frames with no reliable mask unannotated. Glass edits soften
+visible interior detail, and fabric edits lighten or darken it without editing
+the thermal target. RGB, mask and thermal share the geometric augmentation.
+Neither edit assumes that real materials have one fixed thermal appearance.
+
+Use the same validation pairs, size and seed for the control and candidate:
+
+```sh
+python scripts/appearance_report.py --data data512 --weights path/to/checkpoint.pt \
+  --size 384 --seed 42 --output outputs/appearance-report.json
+```
+
+The report measures the mean change in raw heat in edited regions and in
+untouched context, plus error to aligned thermal and the clean output's
+intensity range. Lower edit drift alone is not a win: a flatter model can
+score well. Check clean error and range, and run the existing blind preference
+test on **untouched** held-out frames before changing the shipped checkpoint.
+Without annotated validation masks, glass and clothing are reported as
+unmeasured, not as passes.
+
 ### Rented GPUs
 
 `scripts/vast_fleet.py` runs on the machine holding the Vast API key and the

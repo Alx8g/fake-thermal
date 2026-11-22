@@ -43,106 +43,106 @@ def _blob(shape, cy, cx, sy, sx, angle=0.):
     return out
 
 
-def _jitter(colour, amount=.08):
-    return np.clip(np.array(colour, np.float32) + np.random.uniform(-amount, amount, 3), 0, 1)
+def _jitter(colour, amount=.08, *, np_rng=np.random):
+    return np.clip(np.array(colour, np.float32) + np_rng.uniform(-amount, amount, 3), 0, 1)
 
 
-def _point_light(shape, cy, cx, radius, colour):
+def _point_light(shape, cy, cx, radius, colour, rng):
     """Over-exposed core, a coloured halo and sometimes a lens streak."""
     core = _blob(shape, cy, cx, radius / 1.5, radius / 1.5)[..., None]
-    halo_r = radius * random.uniform(3, 10)
+    halo_r = radius * rng.uniform(3, 10)
     halo = _blob(shape, cy, cx, halo_r, halo_r)[..., None]
     white = .4 + .6 * np.array(colour, np.float32)
-    light = core * random.uniform(1., 1.6) * white + halo * random.uniform(.12, .6) * np.array(colour, np.float32)
-    if random.random() < .25:
-        length = radius * random.uniform(8, 30)
-        streak = _blob(shape, cy, cx, radius * .45, length, random.choice([0., np.pi / 2, random.uniform(0, np.pi)]))
-        light = light + streak[..., None] * random.uniform(.15, .45) * white
+    light = core * rng.uniform(1., 1.6) * white + halo * rng.uniform(.12, .6) * np.array(colour, np.float32)
+    if rng.random() < .25:
+        length = radius * rng.uniform(8, 30)
+        streak = _blob(shape, cy, cx, radius * .45, length, rng.choice([0., np.pi / 2, rng.uniform(0, np.pi)]))
+        light = light + streak[..., None] * rng.uniform(.15, .45) * white
     return light
 
 
-def add_lights(rgb):
+def add_lights(rgb, *, rng=random, np_rng=np.random):
     """1-6 lamps, headlight pairs, rows of street lights, lit windows or light pools."""
     h, w = rgb.shape[:2]
     light = np.zeros_like(rgb)
-    for _ in range(random.randint(1, 6)):
-        kind = random.choices(['point', 'pair', 'row', 'windows', 'pool'], [4, 2, 1, 2, 1.5])[0]
-        colour = _jitter(random.choice(LIGHT_COLOURS))
-        cy, cx = random.uniform(0, h), random.uniform(0, w)
-        radius = float(np.exp(random.uniform(np.log(1.5), np.log(10))))
+    for _ in range(rng.randint(1, 6)):
+        kind = rng.choices(['point', 'pair', 'row', 'windows', 'pool'], [4, 2, 1, 2, 1.5])[0]
+        colour = _jitter(rng.choice(LIGHT_COLOURS), np_rng=np_rng)
+        cy, cx = rng.uniform(0, h), rng.uniform(0, w)
+        radius = float(np.exp(rng.uniform(np.log(1.5), np.log(10))))
         if kind == 'point':
-            light += _point_light((h, w), cy, cx, radius, colour)
+            light += _point_light((h, w), cy, cx, radius, colour, rng)
         elif kind == 'pair':  # headlights or tail lights
-            gap = radius * random.uniform(4, 12)
-            colour = _jitter(random.choice([LIGHT_COLOURS[0], LIGHT_COLOURS[2], LIGHT_COLOURS[3]]))
+            gap = radius * rng.uniform(4, 12)
+            colour = _jitter(rng.choice([LIGHT_COLOURS[0], LIGHT_COLOURS[2], LIGHT_COLOURS[3]]), np_rng=np_rng)
             for side in (-.5, .5):
-                light += _point_light((h, w), cy, cx + side * gap, radius, colour)
+                light += _point_light((h, w), cy, cx + side * gap, radius, colour, rng)
         elif kind == 'row':  # street lights receding along a line
-            dy, dx = random.uniform(-.3, .3), random.choice([-1, 1])
-            step = random.uniform(30, 90)
-            for i in range(random.randint(3, 6)):
+            dy, dx = rng.uniform(-.3, .3), rng.choice([-1, 1])
+            step = rng.uniform(30, 90)
+            for i in range(rng.randint(3, 6)):
                 scale = .75 ** i
                 light += _point_light((h, w), cy + i * step * dy * scale, cx + i * step * dx * scale,
-                                      max(1.2, radius * scale), colour)
+                                      max(1.2, radius * scale), colour, rng)
         elif kind == 'windows':
-            light += _windows((h, w))
+            light += _windows((h, w), rng, np_rng)
         else:  # light pool on the ground, mostly in the lower part of the frame
-            cy = random.uniform(.45 * h, h)
-            sx = random.uniform(30, 160)
-            pool = _blob((h, w), cy, cx, sx * random.uniform(.2, .5), sx)
-            light += pool[..., None] * random.uniform(.1, .35) * colour
+            cy = rng.uniform(.45 * h, h)
+            sx = rng.uniform(30, 160)
+            pool = _blob((h, w), cy, cx, sx * rng.uniform(.2, .5), sx)
+            light += pool[..., None] * rng.uniform(.1, .35) * colour
     return _screen(rgb, light)
 
 
-def _windows(shape):
+def _windows(shape, rng, np_rng):
     """A grid of lit windows on a facade, some dark, soft edged with a faint halo."""
     h, w = shape
-    rows, cols = random.randint(1, 4), random.randint(1, 5)
-    ww, wh = random.uniform(6, 40), random.uniform(8, 55)
-    gx, gy = ww * random.uniform(1.3, 2.2), wh * random.uniform(1.3, 2.)
-    top, left = random.uniform(-wh, h - wh), random.uniform(-ww, w - ww)
+    rows, cols = rng.randint(1, 4), rng.randint(1, 5)
+    ww, wh = rng.uniform(6, 40), rng.uniform(8, 55)
+    gx, gy = ww * rng.uniform(1.3, 2.2), wh * rng.uniform(1.3, 2.)
+    top, left = rng.uniform(-wh, h - wh), rng.uniform(-ww, w - ww)
     mask = Image.new('L', (w, h), 0)
     draw = ImageDraw.Draw(mask)
     for r in range(rows):
         for c in range(cols):
-            if random.random() < .65:
+            if rng.random() < .65:
                 x, y = left + c * gx, top + r * gy
-                draw.rectangle([x, y, x + ww, y + wh], fill=int(255 * random.uniform(.3, 1.)))
-    soft = mask.filter(ImageFilter.GaussianBlur(random.uniform(.6, 1.6)))
+                draw.rectangle([x, y, x + ww, y + wh], fill=int(255 * rng.uniform(.3, 1.)))
+    soft = mask.filter(ImageFilter.GaussianBlur(rng.uniform(.6, 1.6)))
     m = np.asarray(soft, np.float32) / 255
     # light falls off from the top of each pane, like a lamp behind a curtain
-    m = m * (1 - random.uniform(0, .35) * ((np.arange(h, dtype=np.float32)[:, None] - top) % gy / gy))
-    colour = _jitter(random.choice(WINDOW_COLOURS))
-    if random.random() < .5:
+    m = m * (1 - rng.uniform(0, .35) * ((np.arange(h, dtype=np.float32)[:, None] - top) % gy / gy))
+    colour = _jitter(rng.choice(WINDOW_COLOURS), np_rng=np_rng)
+    if rng.random() < .5:
         m = np.maximum(m, np.asarray(mask.filter(ImageFilter.GaussianBlur(ww * .6)), np.float32) / 255 * .35)
-    return m[..., None] * random.uniform(.5, .9) * colour
+    return m[..., None] * rng.uniform(.5, .9) * colour
 
 
-def add_print(rgb):
+def add_print(rgb, *, rng=random, np_rng=np.random):
     """Printed text, logos and road paint stripes, which a thermal camera does not see."""
     h, w = rgb.shape[:2]
     canvas = Image.fromarray((rgb * 255).astype(np.uint8))
     overlay = Image.new('RGBA', (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
-    for _ in range(random.randint(1, 4)):
-        colour = tuple(int(c) for c in random.choice(
+    for _ in range(rng.randint(1, 4)):
+        colour = tuple(int(c) for c in rng.choice(
             [(255, 255, 255), (250, 220, 40), (20, 20, 20), (200, 30, 30), (30, 80, 200),
-             tuple(np.random.randint(0, 256, 3))]))
-        alpha = int(255 * random.uniform(.55, 1.))
-        if random.random() < .55:
-            text = ''.join(random.choices(string.ascii_uppercase + string.digits + '  ', k=random.randint(2, 10)))
-            font = ImageFont.load_default(size=random.randint(12, 64))
-            draw.text((random.uniform(-20, w - 20), random.uniform(-10, h - 10)), text,
+             tuple(np_rng.randint(0, 256, 3))]))
+        alpha = int(255 * rng.uniform(.55, 1.))
+        if rng.random() < .55:
+            text = ''.join(rng.choices(string.ascii_uppercase + string.digits + '  ', k=rng.randint(2, 10)))
+            font = ImageFont.load_default(size=rng.randint(12, 64))
+            draw.text((rng.uniform(-20, w - 20), rng.uniform(-10, h - 10)), text,
                       fill=colour + (alpha,), font=font)
         else:
-            x, y = random.uniform(0, w), random.uniform(h * .3, h)
-            length, angle = random.uniform(40, 320), random.uniform(0, np.pi)
-            dashes = random.random() < .5
+            x, y = rng.uniform(0, w), rng.uniform(h * .3, h)
+            length, angle = rng.uniform(40, 320), rng.uniform(0, np.pi)
+            dashes = rng.random() < .5
             for i in range(6 if dashes else 1):
                 start = i * length * 1.6 if dashes else 0
                 x0, y0 = x + np.cos(angle) * start, y + np.sin(angle) * start
                 draw.line([x0, y0, x0 + np.cos(angle) * length, y0 + np.sin(angle) * length],
-                          fill=colour + (alpha,), width=random.randint(3, 18))
+                          fill=colour + (alpha,), width=rng.randint(3, 18))
     canvas.paste(overlay, (0, 0), overlay)
     return np.asarray(canvas, np.float32) / 255
 
@@ -160,7 +160,7 @@ def _wedge(shape, cy, cx, angle, spread, length):
     return (beam * np.clip(ahead / 6, 0, 1)).astype(np.float32)
 
 
-def add_cast(rgb):
+def add_cast(rgb, *, rng=random, np_rng=np.random):
     """Light falling on surfaces: headlight beams and street-light pools on the ground,
     light spilling across a wall. It multiplies the surface, as real light does, so
     the model learns that brighter ground under a lamp is not warmer ground."""
@@ -169,32 +169,32 @@ def add_cast(rgb):
     tint = np.zeros((h, w, 3), np.float32)
     # cast light shows most on dark scenes; on a sunlit photo keep it subtle
     scale = float(np.clip(1.4 - 2 * rgb.mean(), .3, 1.))
-    for _ in range(random.randint(1, 4)):
-        kind = random.choices(['beam', 'pool', 'spill'], [3, 3, 1])[0]
-        colour = _jitter(random.choice([LIGHT_COLOURS[0], LIGHT_COLOURS[1], LIGHT_COLOURS[2],
-                                        LIGHT_COLOURS[5], LIGHT_COLOURS[6]]))
+    for _ in range(rng.randint(1, 4)):
+        kind = rng.choices(['beam', 'pool', 'spill'], [3, 3, 1])[0]
+        colour = _jitter(rng.choice([LIGHT_COLOURS[0], LIGHT_COLOURS[1], LIGHT_COLOURS[2],
+                                        LIGHT_COLOURS[5], LIGHT_COLOURS[6]]), np_rng=np_rng)
         if kind == 'beam':  # from a car low in the frame, mostly away from or across the view
-            cy, cx = random.uniform(.45 * h, h), random.uniform(0, w)
-            angle = random.choice([random.uniform(-np.pi * .95, -np.pi * .05),  # up the road
-                                   random.uniform(-.25, .25), random.uniform(np.pi - .25, np.pi + .25)])
-            m = _wedge((h, w), cy, cx, angle, random.uniform(.08, .35), random.uniform(.2, .8) * w)
-            if random.random() < .6:  # a pair of headlights
-                m = np.maximum(m, _wedge((h, w), cy, cx + random.uniform(15, 60), angle,
-                                         random.uniform(.08, .35), random.uniform(.2, .8) * w))
+            cy, cx = rng.uniform(.45 * h, h), rng.uniform(0, w)
+            angle = rng.choice([rng.uniform(-np.pi * .95, -np.pi * .05),  # up the road
+                                   rng.uniform(-.25, .25), rng.uniform(np.pi - .25, np.pi + .25)])
+            m = _wedge((h, w), cy, cx, angle, rng.uniform(.08, .35), rng.uniform(.2, .8) * w)
+            if rng.random() < .6:  # a pair of headlights
+                m = np.maximum(m, _wedge((h, w), cy, cx + rng.uniform(15, 60), angle,
+                                         rng.uniform(.08, .35), rng.uniform(.2, .8) * w))
         elif kind == 'pool':  # under a street lamp: a flattened ellipse on the ground
-            cy, cx = random.uniform(.4 * h, h), random.uniform(0, w)
-            sx = random.uniform(25, 180)
-            m = _blob((h, w), cy, cx, sx * random.uniform(.2, .45), sx)
-            m = np.clip(m * random.uniform(1., 1.6), 0, 1)
+            cy, cx = rng.uniform(.4 * h, h), rng.uniform(0, w)
+            sx = rng.uniform(25, 180)
+            m = _blob((h, w), cy, cx, sx * rng.uniform(.2, .45), sx)
+            m = np.clip(m * rng.uniform(1., 1.6), 0, 1)
         else:  # light spilling across a facade or shop front
-            cy, cx = random.uniform(0, h), random.uniform(0, w)
-            m = _blob((h, w), cy, cx, random.uniform(30, 160), random.uniform(30, 220),
-                      random.uniform(0, np.pi))
-        strength = random.uniform(.8, 3.) * scale
+            cy, cx = rng.uniform(0, h), rng.uniform(0, w)
+            m = _blob((h, w), cy, cx, rng.uniform(30, 160), rng.uniform(30, 220),
+                      rng.uniform(0, np.pi))
+        strength = rng.uniform(.8, 3.) * scale
         gain += m * strength
         tint += m[..., None] * strength * colour
     colour = tint / np.maximum(gain, 1e-6)[..., None]
-    lit = rgb * (1 + gain[..., None] * colour) + gain[..., None] * colour * random.uniform(.02, .08)
+    lit = rgb * (1 + gain[..., None] * colour) + gain[..., None] * colour * rng.uniform(.02, .08)
     return np.clip(lit, 0, 1).astype(np.float32)
 
 
