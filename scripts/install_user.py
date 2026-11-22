@@ -37,12 +37,12 @@ def elevate_dctl(command):
         if subprocess.run(['sudo', '-n'] + command, check=False).returncode == 0:
             return True
         try:
-            tty = open('/dev/tty', 'r+')
+            tty = open('/dev/tty', 'rb+', buffering=0)
         except OSError:
             tty = None
         if tty is not None:
             with tty:
-                print('Resolve stores its DCTL preview in /Library. Administrator permission is needed for this file only.', file=tty, flush=True)
+                tty.write(b'Resolve stores its DCTL preview in /Library. Administrator permission is needed for this file only.\n')
                 if subprocess.run(['sudo'] + command, stdin=tty, stdout=tty, stderr=tty, check=False).returncode == 0:
                     return True
         manual = 'sudo ' + shlex.join(command)
