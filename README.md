@@ -60,8 +60,10 @@ For options, download the script and run `sh install.sh --turbo` or
 `--skip-plugins` / `-SkipPlugins` to omit editor integrations, or
 `--uninstall` / `-Uninstall` to remove the installation and plugins (shared
 model caches and Adobe debug settings are retained). Protected DCTL removal
-may require the printed administrator action. Windows removal completes a few
-seconds after the script exits.
+uses the same administrator prompt as installation. Uninstall uses the stored
+installer without downloading uv, Python or source, and completes before returning.
+For piped installs, options can also be set with `FAKE_THERMAL_UNINSTALL=1`,
+or on Windows `FAKE_THERMAL_TURBO=1` and `FAKE_THERMAL_SKIP_PLUGINS=1`.
 Set `FAKE_THERMAL_REF` to a source ref or `FAKE_THERMAL_SOURCE` to a local checkout
 before running; PowerShell also accepts `-Ref` and `-Source`.
 `FAKE_THERMAL_HOME` overrides the installation root (custom roots require

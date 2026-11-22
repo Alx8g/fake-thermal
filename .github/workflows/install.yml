@@ -13,31 +13,41 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Prepare writable Resolve LUT folder on macOS
+      - name: Prepare root-owned Resolve LUT folder on macOS
         if: runner.os == 'macOS'
         run: |
           sudo mkdir -p "/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT"
-          sudo chown "$(id -un)" "/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT"
+          sudo chown root:wheel "/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT"
+          sudo chmod 755 "/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT"
       - name: Install macOS
         if: runner.os == 'macOS'
         env:
-          FAKE_THERMAL_SOURCE: ${{ github.workspace }}
-        run: sh install.sh
+          FAKE_THERMAL_REF: ${{ github.sha }}
+        run: |
+          cat install.sh | sh
+          test "$(stat -f %Su '/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT/Fake Thermal/Fake Thermal.dctl')" = root
       - name: Install Windows
         if: runner.os == 'Windows'
         shell: powershell
-        run: ./install.ps1 -Source $pwd.Path
+        env:
+          FAKE_THERMAL_REF: ${{ github.sha }}
+        run: |
+          $before = $ErrorActionPreference
+          $protocol = [Net.ServicePointManager]::SecurityProtocol
+          $pythonDir = $env:UV_PYTHON_INSTALL_DIR
+          Get-Content install.ps1 -Raw | Invoke-Expression
+          if ($ErrorActionPreference -ne $before) { throw 'Preference leaked' }
+          if ([Net.ServicePointManager]::SecurityProtocol -ne $protocol) { throw 'TLS setting leaked' }
+          if ($env:UV_PYTHON_INSTALL_DIR -ne $pythonDir) { throw 'uv environment leaked' }
       - name: Verify macOS in a fresh shell
         if: runner.os == 'macOS'
-        env:
-          FAKE_THERMAL_SOURCE: ${{ github.workspace }}
         run: |
           export PATH="$HOME/.local/bin:$PATH"
           command -v fake-thermal
           root="$HOME/Library/Application Support/fake-thermal"
           fake-thermal "$root/verification-input.mp4" -o "$root/ci.mp4"
           "$root/venv/bin/python" scripts/check_install.py
-          sh install.sh --uninstall
+          cat install.sh | FAKE_THERMAL_UNINSTALL=1 sh
           test ! -e "$root"
           test ! -e "$HOME/.local/bin/fake-thermal"
           test ! -e "$HOME/.fake-thermal-resolve.json"
@@ -55,8 +65,8 @@ jobs:
           if ($LASTEXITCODE) { throw 'Render failed' }
           & "$root\venv\Scripts\python.exe" scripts/check_install.py
           if ($LASTEXITCODE) { throw 'Verification failed' }
-          ./install.ps1 -Source $pwd.Path -Uninstall
-          Start-Sleep -Seconds 8
+          $env:FAKE_THERMAL_UNINSTALL = '1'
+          Get-Content install.ps1 -Raw | Invoke-Expression
           if (Test-Path $root) { throw 'Install root retained' }
           if (Test-Path "$HOME\.fake-thermal-resolve.json") { throw 'Resolve config retained' }
           if (Test-Path "$env:PROGRAMDATA\Blackmagic Design\DaVinci Resolve\Support\LUT\Fake Thermal") { throw 'DCTL retained' }

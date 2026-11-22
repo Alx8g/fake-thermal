@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -29,6 +30,33 @@ def download(url, path):
 def notify_path_change():
     result = ctypes.c_size_t()
     ctypes.windll.user32.SendMessageTimeoutW(65535, 26, 0, 'Environment', 2, 5000, ctypes.byref(result))
+
+
+def elevate_dctl(command):
+    if sys.platform == 'darwin':
+        if subprocess.run(['sudo', '-n'] + command, check=False).returncode == 0:
+            return True
+        try:
+            tty = open('/dev/tty', 'r+')
+        except OSError:
+            tty = None
+        if tty is not None:
+            with tty:
+                print('Resolve stores its DCTL preview in /Library. Administrator permission is needed for this file only.', file=tty, flush=True)
+                if subprocess.run(['sudo'] + command, stdin=tty, stdout=tty, stderr=tty, check=False).returncode == 0:
+                    return True
+        manual = 'sudo ' + shlex.join(command)
+    elif sys.platform == 'win32':
+        arguments = subprocess.list2cmdline(command[1:])
+        expression = "Start-Process -FilePath '{}' -ArgumentList '{}' -Verb RunAs -Wait -PassThru | ForEach-Object {{ exit $_.ExitCode }}".format(command[0].replace("'", "''"), arguments.replace("'", "''"))
+        if sys.stdin.isatty():
+            if subprocess.run(['powershell.exe', '-NoProfile', '-Command', expression], check=False).returncode == 0:
+                return True
+        manual = '& ' + ' '.join("'" + arg.replace("'", "''") + "'" for arg in command)
+    else:
+        manual = 'sudo ' + shlex.join(command)
+    print('DCTL action requires an elevated shell. Run: ' + manual)
+    return False
 
 
 def main():
@@ -65,13 +93,24 @@ def main():
                 else:
                     path.unlink(missing_ok=True)
             except PermissionError:
-                print('Remove with administrator privileges: ' + str(path))
+                if path == lut / 'Fake Thermal':
+                    if windows:
+                        command = ['powershell.exe', '-NoProfile', '-Command', "Remove-Item -LiteralPath '{}' -Recurse -Force".format(str(path).replace("'", "''"))]
+                    else:
+                        command = ['/bin/rm', '-rf', str(path)]
+                    elevate_dctl(command)
+                else:
+                    print('Remove with administrator privileges: ' + str(path))
         premiere = (Path(os.environ['APPDATA']) if windows else Path.home() / 'Library/Application Support') / 'Adobe/CEP/extensions/com.alx8g.fakethermal.panel'
         shutil.rmtree(premiere, ignore_errors=True)
         if not windows:
             shutil.rmtree(root)
         print('Uninstalled fake-thermal (shared model caches and CEP debug settings retained).')
         return
+    stored = root / 'installer'
+    (stored / 'scripts').mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source / 'scripts/install_user.py', stored / 'scripts/install_user.py')
+    shutil.copytree(source / 'resolve', stored / 'resolve', dirs_exist_ok=True)
     pip = [args.uv, 'pip', 'install', '--python', python, '--upgrade']
     run(*pip, 'torch', 'torchvision', *([] if sys.platform == 'darwin' else ['--index-url', 'https://download.pytorch.org/whl/cpu']))
     run(*pip, source)
@@ -129,12 +168,10 @@ def main():
         command = [str(python), str(source / 'resolve/install.py'), '--dctl-only']
         try:
             run(*command)
-        except subprocess.CalledProcessError:
-            if sys.platform == 'darwin' and sys.stdin.isatty():
-                subprocess.run(['sudo'] + command, check=False)
-            else:
-                import shlex
-                print('Install DCTL from an elevated shell: ' + (subprocess.list2cmdline(command) if windows else 'sudo ' + shlex.join(command)))
+        except subprocess.CalledProcessError as error:
+            if error.returncode != 3:
+                raise
+            elevate_dctl(command)
         if windows:
             run('powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', source / 'plugins/premiere/install-windows.ps1')
         elif sys.platform == 'darwin':

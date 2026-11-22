@@ -72,6 +72,8 @@ def main(argv=None):
             config_path = home / CONFIG_NAME
             config_path.write_text(json.dumps(config, indent=2) + '\n', encoding='utf-8')
             print('Wrote {}'.format(config_path))
+    except PermissionError as error:
+        parser.exit(3, '{}\nAdministrator permission is required for this directory.\n'.format(error))
     except (OSError, ValueError) as error:
         parser.exit(1, '{}\nUse --lut-dir or --scripts-dir to select a writable Resolve directory.\n'.format(error))
 
