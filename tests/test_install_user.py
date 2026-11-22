@@ -56,6 +56,21 @@ class MediaLinksTests(unittest.TestCase):
             self.assertFalse(installer.link_path_media_tools(Path(folder)))
             self.assertEqual(list(Path(folder).iterdir()), [])
 
+    def test_symlinked_venv_directory_on_path_does_not_create_loops(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            bindir = root / 'bin'
+            bindir.mkdir()
+            alias = root / 'vbin'
+            alias.symlink_to(bindir, target_is_directory=True)
+            for name in ('ffmpeg', 'ffprobe'):
+                (bindir / name).touch()
+            with patch.object(installer.sys, 'platform', 'darwin'), patch.object(installer.shutil, 'which', side_effect=lambda name: str(alias / name)):
+                self.assertTrue(installer.link_path_media_tools(bindir))
+            for name in ('ffmpeg', 'ffprobe'):
+                self.assertTrue((bindir / name).is_file())
+                self.assertFalse((bindir / name).is_symlink())
+
     def test_windows_does_not_link_path_tools(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(installer.sys, 'platform', 'win32'), patch.object(installer.shutil, 'which', return_value='C:/tools/ffmpeg.exe'):
             self.assertTrue(installer.link_path_media_tools(Path(folder)))

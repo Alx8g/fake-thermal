@@ -40,7 +40,9 @@ def link_path_media_tools(bindir):
         for name, found in tools.items():
             target = Path(found).absolute()
             destination = bindir / name
-            if destination.absolute() != target and (not destination.is_symlink() or destination.readlink() != target):
+            if target.parent.resolve() == bindir.resolve():
+                continue
+            if not destination.is_symlink() or destination.readlink() != target:
                 destination.unlink(missing_ok=True)
                 destination.symlink_to(target)
     return True
