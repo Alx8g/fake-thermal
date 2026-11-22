@@ -4,6 +4,44 @@ A running lab notebook for the photorealism campaign: what was tried, what it
 measured, what it cost. Newest first. Conclusions are folded into TRAINING.md
 and ROADMAP.md.
 
+## Talking heads: first real measurement (23 Nov 2026)
+
+**Data.** SpeakingFaces (ISSAI, CC BY 4.0): 142 people filmed close up by a
+FLIR T540 (464x348) next to a webcam, sitting still at nine head angles and
+reading commands aloud. The full release is 2.1 TB of zipped frames;
+`scripts/fetch_speakingfaces.py` reads each subject zip's index over HTTP and
+fetches only the sampled frames by byte range (about 40 MB of each ~9 GB zip).
+The thermal frames are lossless 224-colour FLIR iron palette images, inverted
+to grey by palette index (no off-palette pixel in 14,791 frames); the
+dataset's own webcam-to-thermal alignment holds to a few pixels on glasses,
+hairline, collars and teeth. Pulled: 12,753 train pairs (subjects 1-100, about
+36 still and 90 speaking frames each) and 2,038 held-out pairs (101-142).
+
+**Baseline (round f1).** The shipped model (turbo4-cast, product pipeline:
+semantic prior .7, no emissive, no vehicles, sharp and parts priors), run on
+CPU, on 64 frames from the 22 official test subjects. Real-vs-fake as separate
+files, 4 fresh judges x 32 pairs: **fake spotted 128 of 128** (judges picked A
+14-17 of 32, so no side bias). Singles, 3 fresh judges x 32 frames (16 real,
+16 generated): every judge classified all 32 correctly. On close-up faces the
+model is caught every time; the street-scene numbers above do not carry over.
+
+What gave it away, from the 64 reasons of two of the judges:
+
+| Tell | Share |
+|---|---|
+| face flat and evenly hot; real faces are blotchy, with a cool nose and hot eye corners | 58% |
+| warm gradient behind the person, like a sky or road (an office wall is uniformly cold) | 42% |
+| glasses see-through; glass is opaque in LWIR, so real lenses are dark | 38% |
+| bright halo or rim along hair and shoulders | 30% |
+| office chair (black mesh) drawn hot | 23% |
+| photo detail copied: scarf prints, eye whites and irises, specular dots | 13% |
+
+Every one of these is in the SpeakingFaces training pairs (glasses on many
+subjects, a cold wall, chairs, scarves, open mouths), so the next Mac run adds
+them as an `sf` source with its own camera prompt. Held-out faces live in a
+separate data root: `validation_ids` needs exactly three val sources, so sf_
+frames must not go into data512/pairs/val.
+
 ## What still gives the fake away (22 Nov 2026, evening)
 
 **The held-out test is mostly night.** The 32 FLIR frames used by every

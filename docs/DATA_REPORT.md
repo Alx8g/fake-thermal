@@ -81,6 +81,20 @@ as the initial preparation. Day and night both occur (10 day / 2 night in its
 validation run is nighttime-only, and true scene-disjointness remains unproven.
 Some pre-aligned RGB frames have black warp borders and residual mismatch.
 
+### SpeakingFaces (added 23 Nov 2026)
+
+Close-up faces from the CC BY 4.0 SpeakingFaces set (FLIR T540 464x348 thermal
+with the dataset's aligned webcam frames), fetched by `scripts/fetch_speakingfaces.py`.
+Official subject split: subjects 1-100 train (12,753 pairs: two frames per still
+clip of each trial and angle, one per spoken command), 101-142 held out (2,038
+pairs). Stems are `sf_<subject>_<trial>_<session>_<angle>_<clip>_<frame>`; session
+1 is still, 2 is speaking. Thermal is inverted from the 224-colour FLIR iron
+palette by index; the alignment warp's black fill is trimmed from both images,
+which are resized to a 512 short side. Subject 2 has no still-session zip and
+subjects 16 and 28 no speaking zip upstream. The held-out frames are kept in a
+separate data root, not `pairs/val`: validation selection expects exactly the
+three original sources.
+
 ## Outputs and visual evidence
 
 - `data/preview_llvip.jpg`: 12 deterministic random full-LLVIP pairs.
