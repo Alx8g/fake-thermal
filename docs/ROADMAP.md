@@ -32,6 +32,9 @@ Next, in order of expected value:
    reduces the model resolution and interpolates between keyframes for
    editorial passes. Distilling into a smaller student or running on a GPU
    are still options for full-rate exports.
+5. **DaVinci Resolve.** The [Resolve integration](../resolve/README.md) adds a
+   live DCTL look for editing and offline model rendering from selected Media
+   Pool source clips. The DCTL shares the CLI palettes but does not run a model.
 
 The phases below are the earlier plan (19-20 Nov), kept for the record.
 
