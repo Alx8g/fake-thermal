@@ -38,9 +38,9 @@ def link_path_media_tools(bindir):
         return False
     if sys.platform != 'win32':
         for name, found in tools.items():
-            target = Path(found).resolve()
+            target = Path(found).absolute()
             destination = bindir / name
-            if destination.resolve() != target:
+            if destination.absolute() != target and (not destination.is_symlink() or destination.readlink() != target):
                 destination.unlink(missing_ok=True)
                 destination.symlink_to(target)
     return True

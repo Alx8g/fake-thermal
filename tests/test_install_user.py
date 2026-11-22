@@ -13,7 +13,7 @@ spec.loader.exec_module(installer)
 
 
 class MediaLinksTests(unittest.TestCase):
-    def test_links_resolved_path_tools_for_gui_and_repeated_installs(self):
+    def test_links_stable_path_tools_for_gui_and_repeated_installs(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             bindir = root / 'bin'
@@ -31,7 +31,25 @@ class MediaLinksTests(unittest.TestCase):
                     self.assertTrue(installer.link_path_media_tools(bindir))
                 for name in tools:
                     self.assertTrue((bindir / name).is_symlink())
-                    self.assertEqual((bindir / name).readlink(), root / (name + '-real'))
+                    self.assertEqual((bindir / name).readlink(), root / name)
+            replacement = root / 'ffmpeg-upgraded'
+            replacement.touch()
+            (root / 'ffmpeg').unlink()
+            (root / 'ffmpeg').symlink_to(replacement)
+            (root / 'ffmpeg-real').unlink()
+            self.assertTrue((bindir / 'ffmpeg').is_file())
+            self.assertEqual((bindir / 'ffmpeg').resolve(), replacement)
+
+    def test_venv_tools_on_path_are_not_replaced_with_self_links(self):
+        with tempfile.TemporaryDirectory() as folder:
+            bindir = Path(folder)
+            for name in ('ffmpeg', 'ffprobe'):
+                (bindir / name).touch()
+            with patch.object(installer.sys, 'platform', 'darwin'), patch.object(installer.shutil, 'which', side_effect=lambda name: str(bindir / name)):
+                self.assertTrue(installer.link_path_media_tools(bindir))
+            for name in ('ffmpeg', 'ffprobe'):
+                self.assertTrue((bindir / name).is_file())
+                self.assertFalse((bindir / name).is_symlink())
 
     def test_missing_tool_leaves_directory_untouched_for_download(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(installer.shutil, 'which', side_effect=['/tools/ffmpeg', None]):
