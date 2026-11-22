@@ -110,8 +110,9 @@ frames when training ends.
 
 Fine-tune a separate checkpoint with `--appearance-weight .3` and compare
 with a run from the same initialization and seed at `--appearance-weight 0`.
-On every fourth optimizer step (`--appearance-every`), a second pass gets the same RGB crop with one
-visible-only edit. The extra loss is weighted toward changed pixels and
+On every fourth optimizer step (`--appearance-every`), a second pass gets
+the same RGB crop with one visible-only edit. Both passes reuse the same
+denoising noise. The extra loss is weighted toward changed pixels and
 compares against the unchanged thermal target and, more lightly, the
 detached original prediction. Unedited RGB/thermal pairs still train the
 base objective. No extra model, checkpoint format or inference pass is needed.

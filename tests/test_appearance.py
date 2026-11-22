@@ -11,7 +11,7 @@ import torch
 from fake_thermal.appearance import edit_appearance
 from fake_thermal.losses import appearance_loss
 from scripts.appearance_report import pair_metrics, sample_cases, summarize
-from scripts.train_turbo import TurboPairs
+from scripts.train_turbo import TurboPairs, capture_rng, replay_rng
 
 
 class AppearanceTests(unittest.TestCase):
@@ -131,6 +131,17 @@ class AppearanceTests(unittest.TestCase):
         summary = summarize([{'stem': 'a', 'kind': 'print', **result}], ('print', 'glass'))
         self.assertEqual(summary['glass'], {'count': 0})
         self.assertEqual(summary['print']['count'], 1)
+
+    def test_replayed_forward_uses_clean_noise_without_advancing_rng(self):
+        device = torch.device('cpu')
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(42)
+            before = capture_rng(device)
+            clean_noise = torch.rand(8)
+            next_state = torch.get_rng_state()
+            with replay_rng(device, before):
+                torch.testing.assert_close(torch.rand(8), clean_noise)
+            torch.testing.assert_close(torch.get_rng_state(), next_state)
 
     def test_case_sampling_keeps_material_kinds_to_annotated_frames(self):
         with tempfile.TemporaryDirectory() as directory:

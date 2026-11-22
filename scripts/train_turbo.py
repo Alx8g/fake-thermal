@@ -12,6 +12,7 @@ realism frames (outputs/realism/ids.json) are rendered for scoring.
 import argparse
 import json
 from collections import Counter
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import random
@@ -130,6 +131,23 @@ def amp_dtype(device):
 def autocast(device):
     dtype = amp_dtype(device)
     return torch.autocast(device.type, dtype=dtype or torch.float16, enabled=dtype is not None)
+
+
+def capture_rng(device):
+    accelerator = getattr(torch, device.type) if device.type != 'cpu' else None
+    return torch.get_rng_state(), accelerator.get_rng_state(device) if accelerator else None
+
+
+@contextmanager
+def replay_rng(device, state):
+    devices = [] if device.type == 'cpu' else [device]
+    device_type = device.type if devices else 'cuda'
+    with torch.random.fork_rng(devices=devices, device_type=device_type):
+        cpu, accelerator = state
+        torch.set_rng_state(cpu)
+        if accelerator is not None:
+            getattr(torch, device.type).set_rng_state(accelerator, device)
+        yield
 
 
 def save_grid(net, batch, path):
@@ -295,6 +313,11 @@ def main():
         rgb, target, _ = batch[:3]
         rgb, target = rgb.to(device, non_blocking=True), target.to(device, non_blocking=True)
         net.set_train()
+        paired_rng = None
+        if args.appearance_weight and step % args.appearance_every == 0:
+            edited, influence = batch[3:]
+            if influence.any():
+                paired_rng = capture_rng(device)
         with autocast(device):
             pred = net(rgb)
             l2 = F.mse_loss(pred.float(), target)
@@ -313,18 +336,16 @@ def main():
             raise RuntimeError(f'Non-finite loss at step {step}: {loss.item()}')
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
-        if args.appearance_weight and step % args.appearance_every == 0:
-            edited, influence = batch[3:]
-            if influence.any():
-                edited = edited.to(device, non_blocking=True)
-                influence = influence.to(device, non_blocking=True)
-                with autocast(device):
-                    edited_pred = net(edited)
-                appearance = appearance_loss(edited_pred, pred, target, influence)
-                if not torch.isfinite(appearance):
-                    raise RuntimeError(f'Non-finite appearance loss at step {step}: {appearance.item()}')
-                (args.appearance_weight * appearance).backward()
-                appearance_values.append(appearance.item())
+        if paired_rng is not None:
+            edited = edited.to(device, non_blocking=True)
+            influence = influence.to(device, non_blocking=True)
+            with replay_rng(device, paired_rng), autocast(device):
+                edited_pred = net(edited)
+            appearance = appearance_loss(edited_pred, pred, target, influence)
+            if not torch.isfinite(appearance):
+                raise RuntimeError(f'Non-finite appearance loss at step {step}: {appearance.item()}')
+            (args.appearance_weight * appearance).backward()
+            appearance_values.append(appearance.item())
         torch.nn.utils.clip_grad_norm_(params, 1.)
         optimizer.step()
         scheduler.step()
