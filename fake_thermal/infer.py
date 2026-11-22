@@ -87,7 +87,7 @@ class TemporalSmoother:
                             interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
         residual = cv2.absdiff(small, aligned).mean(axis=2, dtype=np.float32)
         # A local check catches a small moving subject that a whole-frame mean misses.
-        window = max(8, min(back.shape[:2]) // 12)
+        window = max(4, min(back.shape[:2]) // 10)
         if cv2.blur(residual, (window, window)).max() > 20:
             return None
         scale = np.float32([w / back.shape[1], h / back.shape[0]])

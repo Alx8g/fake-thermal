@@ -101,10 +101,10 @@ class PaletteTests(unittest.TestCase):
         self.assertIsNone(no_flow.carry(rgb))
 
     def test_carry_rejects_local_change_without_advancing_history(self):
-        rgb = np.full((192, 192, 3), [0, 0, 200], np.uint8)
+        rgb = np.full((192, 192, 3), [0, 0, 140], np.uint8)
         heat = np.zeros((192, 192), np.float32)
         changed = rgb.copy()
-        changed[72:120, 72:120] = [76, 0, 0]  # similar luminance, different color
+        changed[88:104, 88:104] = [53, 0, 0]  # similar luminance, different color
         smoother = TemporalSmoother()
         last = smoother.update(heat, rgb)
         self.assertIsNone(smoother.carry(changed))

@@ -22,7 +22,7 @@ Next, in order of expected value:
    streets from three cameras. Larger aligned RGB-thermal sets exist, e.g.
    LasHeR (1,224 aligned visible/thermal video pairs, 730K+ frame pairs, far
    more varied scenes); check each licence before use.
-3. **Video.** The [real-footage tests](EXPERIMENTS.md#people-flicker-and-the-augmented-run-20-21-nov-2026-night)
+3. **Video.** The [real-footage tests](EXPERIMENTS.md#turbo-video-stride-and-adapter-fusion-22-nov-2026)
    support the default motion-compensated smoothing. The optional accelerated
    stride refreshes predictions when RGB motion does not track. Similar-looking
    cuts, fast motion and temporal training remain open problems.
