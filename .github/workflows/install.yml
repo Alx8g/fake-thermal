@@ -25,6 +25,8 @@ jobs:
           FAKE_THERMAL_REF: ${{ github.sha }}
         run: |
           cat install.sh | sh
+          test ! -e "$HOME/.local/bin/python3.11"
+          test ! -L "$HOME/.local/bin/python3.11"
           test "$(stat -f %Su '/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT/Fake Thermal/Fake Thermal.dctl')" = root
       - name: Install Windows
         if: runner.os == 'Windows'
@@ -49,6 +51,8 @@ jobs:
           "$root/venv/bin/python" scripts/check_install.py
           cat install.sh | FAKE_THERMAL_UNINSTALL=1 sh
           test ! -e "$root"
+          test ! -e "$HOME/.local/bin/python3.11"
+          test ! -L "$HOME/.local/bin/python3.11"
           test ! -e "$HOME/.local/bin/fake-thermal"
           test ! -e "$HOME/.fake-thermal-resolve.json"
           test ! -e "/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT/Fake Thermal"

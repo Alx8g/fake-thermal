@@ -19,7 +19,7 @@ curl -fLsS "https://github.com/astral-sh/uv/releases/download/0.9.18/uv-$target.
 tar -xzf "$root/bootstrap/uv.tar.gz" -C "$root/bootstrap"
 uv="$root/bootstrap/uv-$target/uv"
 export UV_PYTHON_INSTALL_DIR="$root/python"
-"$uv" python install 3.11
+"$uv" python install --no-bin --no-registry 3.11
 "$uv" venv --python 3.11 --managed-python --allow-existing "$root/venv"
 source_dir=${FAKE_THERMAL_SOURCE:-}
 if [ -z "$source_dir" ]; then

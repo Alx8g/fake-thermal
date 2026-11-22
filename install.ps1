@@ -35,7 +35,7 @@ Invoke-WebRequest -UseBasicParsing "https://github.com/astral-sh/uv/releases/dow
 Expand-Archive -Force "$bootstrap\uv.zip" $bootstrap
 $uv = (Get-ChildItem $bootstrap -Filter uv.exe -Recurse | Select-Object -First 1).FullName
 $env:UV_PYTHON_INSTALL_DIR = Join-Path $root 'python'
-& $uv python install 3.11
+& $uv python install --no-bin --no-registry 3.11
 if ($LASTEXITCODE) { throw 'Python bootstrap failed' }
 & $uv venv --python 3.11 --managed-python --allow-existing "$root\venv"
 if ($LASTEXITCODE) { throw 'venv bootstrap failed' }
