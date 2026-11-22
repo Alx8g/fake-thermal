@@ -5,8 +5,10 @@ a fast, CPU-friendly ResNet18 U-Net (default), and `--engine turbo`, a
 one-step SD-Turbo model fine-tuned on paired RGB/thermal footage that is far
 more photographic and much slower.
 
-Use the CLI, the web UI, or the [DaVinci Resolve integration](resolve/README.md)
-for an on-clip preview and offline model rendering. Premiere Pro support is planned.
+Use the CLI, the web UI, the [DaVinci Resolve integration](resolve/README.md)
+for an on-clip preview and offline model rendering, or the
+[Premiere Pro panel](plugins/premiere/README.md), which renders selected
+timeline clips offline with the local CLI and places the result on a track above.
 
 **This predicts typical heat appearance, not measured temperature.** It cannot
 recover real thermal information from phone RGB sensors. Colors are relative

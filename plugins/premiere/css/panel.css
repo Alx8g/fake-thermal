@@ -1,0 +1,8 @@
+:root { color-scheme: dark; font: 12px Arial, sans-serif; background: #252525; color: #ddd; }
+body { margin: 16px; } h1 { font-size: 19px; font-weight: 500; margin-bottom: 4px; }
+p { color: #aaa; line-height: 1.5; } label { display: block; margin: 14px 0; }
+input:not([type=checkbox]), select { box-sizing: border-box; display: block; width: 100%; margin-top: 6px; background: #191919; color: #eee; border: 1px solid #555; padding: 7px; border-radius: 3px; }
+.check { display: flex; align-items: center; gap: 6px; line-height: 1.5; }
+button { padding: 7px 20px; border-radius: 4px; border: 1px solid #777; background: #363636; color: white; cursor: pointer; }
+#apply { background: #27679a; border-color: #398ace; } button:disabled { opacity: .45; cursor: default; }
+progress { width: 100%; margin-top: 20px; accent-color: #4aa7ea; } pre { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
