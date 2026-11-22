@@ -37,6 +37,9 @@ function findCommand() {
     const exe = process.platform === 'win32' ? 'fake-thermal.exe' : 'fake-thermal';
     const home = os.homedir();
     const dirs = (process.env.PATH || '').split(path.delimiter).concat([
+        path.join(process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'fake-thermal', 'venv', 'Scripts'),
+        path.join(home, 'Library', 'Application Support', 'fake-thermal', 'venv', 'bin'),
+        path.join(home, '.fake-thermal', 'venv', 'bin'),
         path.join(home, '.local', 'bin'), path.join(home, 'repos', 'fake-thermal', '.venv', 'bin'),
         path.join(home, 'fake-thermal', '.venv', 'bin'), path.join(home, 'fake-thermal', '.venv', 'Scripts'),
         path.join(home, 'venvs', 'fake-thermal', process.platform === 'win32' ? 'Scripts' : 'bin'), '/opt/homebrew/bin', '/usr/local/bin']);

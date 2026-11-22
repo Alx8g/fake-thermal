@@ -1,3 +1,9 @@
+# Recommended installation
+
+Use the [one-command installer](../../README.md#one-command-install) to install
+the CLI, media tools and this panel together. The instructions below cover
+manual installation and configuration.
+
 # Fake Thermal for Premiere Pro
 
 A Node-enabled CEP panel for Premiere Pro 2022+ (CSXS 11). This is an

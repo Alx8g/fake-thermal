@@ -1,3 +1,9 @@
+# Recommended installation
+
+Use the [one-command installer](../README.md#one-command-install) to install
+the CLI, media tools, DCTL and render script together. The instructions below
+are for manual installation and configuration.
+
 # Fake Thermal for DaVinci Resolve
 
 The **Fake Thermal** DCTL is an instant, editable look on a Color page node.

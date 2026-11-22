@@ -53,7 +53,9 @@ def main(argv=None):
         lut_dir, scripts_dir = default_paths(sys.platform, home, os.environ)
         config = None
         if not args.dctl_only:
-            tools = [shutil.which(tool) for tool in ('ffmpeg', 'ffprobe')]
+            tools = [shutil.which(tool) or next((str(p) for p in
+                     [Path(sys.executable).parent / (tool + ('.exe' if sys.platform == 'win32' else ''))]
+                     if p.is_file()), None) for tool in ('ffmpeg', 'ffprobe')]
             if not all(tools):
                 parser.error('Install ffmpeg and ffprobe and put them on PATH before installing the render script.')
             config = {
