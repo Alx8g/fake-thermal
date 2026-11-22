@@ -32,6 +32,20 @@ def notify_path_change():
     ctypes.windll.user32.SendMessageTimeoutW(65535, 26, 0, 'Environment', 2, 5000, ctypes.byref(result))
 
 
+def link_path_media_tools(bindir):
+    tools = {name: shutil.which(name) for name in ('ffmpeg', 'ffprobe')}
+    if not all(tools.values()):
+        return False
+    if sys.platform != 'win32':
+        for name, found in tools.items():
+            target = Path(found).resolve()
+            destination = bindir / name
+            if destination.resolve() != target:
+                destination.unlink(missing_ok=True)
+                destination.symlink_to(target)
+    return True
+
+
 def elevate_dctl(command):
     if sys.platform == 'darwin':
         if subprocess.run(['sudo', '-n'] + command, check=False).returncode == 0:
@@ -116,7 +130,7 @@ def main():
     run(*pip, source)
     if args.turbo:
         run(*pip, 'diffusers', 'transformers', 'peft', 'mediapipe', 'huggingface_hub')
-    if not all(shutil.which(name) for name in ('ffmpeg', 'ffprobe')):
+    if not link_path_media_tools(bindir):
         with tempfile.TemporaryDirectory(dir=root) as temporary:
             temporary = Path(temporary)
             if windows:
@@ -142,6 +156,8 @@ def main():
             for name in ('ffmpeg', 'ffprobe'):
                 filename = name + ('.exe' if windows else '')
                 tool = next(temporary.rglob(filename))
+                if (bindir / filename).is_symlink():
+                    (bindir / filename).unlink()
                 shutil.copy2(tool, bindir / filename)
                 (bindir / filename).chmod(0o755)
     os.environ['PATH'] = str(bindir) + os.pathsep + os.environ.get('PATH', '')

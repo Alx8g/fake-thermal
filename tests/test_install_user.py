@@ -2,6 +2,7 @@ import importlib.util
 import io
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -9,6 +10,38 @@ from unittest.mock import Mock, patch
 spec = importlib.util.spec_from_file_location('install_user', Path(__file__).resolve().parents[1] / 'scripts/install_user.py')
 installer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(installer)
+
+
+class MediaLinksTests(unittest.TestCase):
+    def test_links_resolved_path_tools_for_gui_and_repeated_installs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            bindir = root / 'bin'
+            bindir.mkdir()
+            tools = {}
+            for name in ('ffmpeg', 'ffprobe'):
+                target = root / (name + '-real')
+                target.touch()
+                launcher = root / name
+                launcher.symlink_to(target)
+                tools[name] = str(launcher)
+            for platform in ('darwin', 'linux'):
+                with patch.object(installer.sys, 'platform', platform), patch.object(installer.shutil, 'which', side_effect=tools.get):
+                    self.assertTrue(installer.link_path_media_tools(bindir))
+                    self.assertTrue(installer.link_path_media_tools(bindir))
+                for name in tools:
+                    self.assertTrue((bindir / name).is_symlink())
+                    self.assertEqual((bindir / name).readlink(), root / (name + '-real'))
+
+    def test_missing_tool_leaves_directory_untouched_for_download(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(installer.shutil, 'which', side_effect=['/tools/ffmpeg', None]):
+            self.assertFalse(installer.link_path_media_tools(Path(folder)))
+            self.assertEqual(list(Path(folder).iterdir()), [])
+
+    def test_windows_does_not_link_path_tools(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(installer.sys, 'platform', 'win32'), patch.object(installer.shutil, 'which', return_value='C:/tools/ffmpeg.exe'):
+            self.assertTrue(installer.link_path_media_tools(Path(folder)))
+            self.assertEqual(list(Path(folder).iterdir()), [])
 
 
 class ElevationTests(unittest.TestCase):
