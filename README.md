@@ -1,7 +1,9 @@
 # fake-thermal
 
-Turn RGB videos and photos into a synthetic thermal-camera look, using a
-CPU-friendly ResNet18 U-Net trained on paired RGB/thermal images.
+Turn RGB videos and photos into a synthetic thermal-camera look. Two engines:
+a fast, CPU-friendly ResNet18 U-Net (default), and `--engine turbo`, a
+one-step SD-Turbo model fine-tuned on paired RGB/thermal footage that is far
+more photographic and much slower.
 
 Premiere Pro and DaVinci Resolve plugins are planned; this version provides
 the CLI and web UI only.
@@ -10,9 +12,11 @@ the CLI and web UI only.
 recover real thermal information from phone RGB sensors. Colors are relative
 predicted intensity, not Celsius/Fahrenheit. Predictions may be wrong: do not
 use them for medical, safety, surveillance decisions, or temperature measurement.
-The bundled weights are the best checkpoint of a 30,000-iteration run
-(validation L1 0.1696, a third below the semantic-prior-only baseline);
-outputs are plausible thermal appearance, not thermometry.
+In blind tests, judges shown a turbo frame and the real thermal frame of the
+same scene picked the real one 71-87% of the time, depending on the panel of
+judges (82% in the latest round; on KAIST street scenes 50-63%, where 50% is
+chance); the U-Net is spotted every time. Outputs are plausible thermal
+appearance, not thermometry. Measurements: [experiment log](docs/EXPERIMENTS.md).
 
 ## Demo
 
@@ -53,11 +57,14 @@ fake-thermal input.mov -o out.mp4 --device auto --auto-contrast
 fake-thermal input.mov -o fixed-display.mp4 --device cpu --no-auto-contrast
 ```
 
-Palettes: **ironbow**, **white-hot**, **black-hot**, **rainbow**, **arctic**.
+Palettes: **ironbow**, **white-hot**, **black-hot**, **rainbow**, **arctic**, **lava**, **glowbow**.
 Default working short side is 384; output returns to source resolution.
-Inference defaults to two CPU threads (`--threads 2`). EMA smoothing defaults
-to .65 previous-frame weight and resets on detected hard cuts; `--smoothing 0`
-disables it. `--raw` adds a grayscale `_raw.mp4` or `_raw.png` alongside output.
+Inference defaults to two CPU threads (`--threads 2`). Temporal smoothing
+defaults to motion-compensated propagation: the previous heat map is carried
+along estimated motion with occlusion masking (Bonneel et al., 2015 pattern),
+falls back to plain previous-frame weighting on static shots (`--no-flow-smoothing`)
+and resets on detected hard cuts; `--smoothing 0` disables it entirely.
+`--raw` adds a grayscale `_raw.mp4` or `_raw.png` alongside output.
 
 **Semantic heat priors are on by default** (`--semantic`, strength .7). A
 pretrained torchvision DeepLabV3 MobileNetV3 model runs at 320px short side,
@@ -91,6 +98,41 @@ AAC fallback otherwise. Variable-frame-rate timestamps become constant-rate
 timing. Processing is not real-time: with training running, default-size demo
 rates were 3–4 fps with semantics and 5–6 fps without. Real iPhone HDR color handling has
 not been validated. See [media behavior and limitations](docs/INFERENCE.md).
+
+### Photographic engine (`--engine turbo`)
+
+```sh
+python -m pip install diffusers transformers peft mediapipe
+fake-thermal input.mov -o out.mp4 --engine turbo
+fake-thermal input.mov -o out.mp4 --engine turbo --turbo-weights path/to/turbo.pt --side-by-side
+```
+
+The default U-Net engine is fast but its output stays visibly smooth. The
+turbo engine runs pix2pix-Turbo: one denoising step of SD-Turbo with LoRA
+adapters fine-tuned on paired RGB/thermal footage. It renders much sharper,
+more photographic thermal texture, at about 2.5 s per vertical 9:16 frame on
+an M1 Pro (512 working short side; landscape frames are faster), so it suits
+offline video work, not live use. `--stride 2` runs the model on every second
+frame and carries the heat along the estimated motion in between: about 1.3 s
+per frame, with some smearing on fast movement such as waving hands.
+It downloads SD-Turbo (~5 GB) from Hugging Face on first use; check
+[SD-Turbo's licence](https://huggingface.co/stabilityai/sd-turbo) before any
+commercial use. With the turbo engine the semantic prior warms only people and
+animals (vehicles excluded, edges fitted to the photo) and sensor simulation
+defaults off (it synthesizes its own sensor texture); temporal smoothing, auto
+contrast and palettes work as before. The fine alternating-row and
+alternating-column pattern SD-Turbo's decoder leaves, which real thermal
+cameras do not make, is removed from every frame.
+
+With either engine, people large enough to segment get body-part heat instead
+of one uniform level: exposed skin hottest, clothing warm but cooler, hair,
+caps, masks and glasses cooler still. Parts come from Google's MediaPipe
+multiclass selfie segmenter (`pip install mediapipe`, Apache 2.0 model card;
+the ~16 MB model downloads to the Torch cache on first use). Distant people keep
+the uniform level, and without `mediapipe` every person does. In a blind test on
+close-up frames, judges preferred the part-aware turbo rendering 46 times out of
+48. Realism and flicker measurements for both engines are in
+[the experiment log](docs/EXPERIMENTS.md).
 
 ## Web UI
 
@@ -165,9 +207,9 @@ data.** They are not MIT-licensed. Upstream terms still apply; this notice does
 not grant rights beyond those terms, and unrestricted redistribution or
 commercial use is not established. Verify upstream permissions for your use.
 
-The bundled weights are the best checkpoint (iteration 17,500 of a 30,000-iteration
-M1 Pro MPS run, validation L1 0.169593, ~8% below the previous CPU-run export
-at iteration 3,500). See [weights notice](fake_thermal/weights/README.md).
+Bundled weights: `fake_thermal.pt` (U-Net engine, adversarially fine-tuned)
+and `turbo.pt` (turbo engine LoRA weights; SD-Turbo is downloaded separately
+under its own licence). See [weights notice](fake_thermal/weights/README.md).
 
 ## Tests
 
