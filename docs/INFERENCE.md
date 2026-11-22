@@ -65,6 +65,19 @@ all local network interfaces; use only on a trusted machine/network.
   rate and audio are unchanged; timing JSON includes `model_frames` so you can
   see how many frames were predicted rather than reused. Use the default
   `--stride 1` for full-rate model inference.
+- `--engine turbo --turbo-preview` is an opt-in draft preset (also in the UI).
+  It defaults to a 256 px working short side and a model keyframe every four
+  frames at most. Intermediate heat is warped from both surrounding keyframes
+  and blended by local RGB match and temporal distance. If neither keyframe
+  matches a patch, the model rerenders that frame. Detected cuts start a new
+  segment; the last frame of each segment is a keyframe. A short frame buffer
+  lets the encoder keep the original order, size, rate, and audio.
+  `--size` and `--stride` override the preset; lookahead is capped at six
+  frames. `--stride 1` or `--no-flow-smoothing` predicts every frame at the
+  selected size. Images use the selected size without interpolation.
+  Drafts can soften small features or change heat. Fast motion can trigger
+  nearly full-rate prediction, even with a higher stride. Turn the preset
+  off for a full-quality export. See [draft results](EXPERIMENTS.md#two-keyframe-turbo-draft-preview-22-nov-2026).
 - Semantic priors default on at strength .7. `--no-semantic` disables semantic
   and emissive priors; `--semantic-strength 0` also bypasses segmentation.
   DeepLabV3 MobileNetV3 runs at 320px short side, using the pretrained

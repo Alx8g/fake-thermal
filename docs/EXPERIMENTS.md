@@ -4,6 +4,63 @@ A running lab notebook for the photorealism campaign: what was tried, what it
 measured, what it cost. Newest first. Conclusions are folded into TRAINING.md
 and ROADMAP.md.
 
+## Two-keyframe turbo draft preview (22 Nov 2026)
+
+The draft preset runs the same checkpoint at a 256 px working short side.
+Instead of repeatedly carrying the last smoothed heat map, it warps heat from
+both surrounding model keyframes, weights them by matching RGB and temporal
+distance, and rerenders a frame when neither matches locally. Detected cuts
+split the keyframe sequence. The default full-rate export does not use this
+interpolation.
+
+To isolate the interpolation from the resolution change, both methods
+replayed the same cached 128 px model predictions and used a full-rate
+smoothed render as the reference:
+
+| Clip | One-sided stride 2 calls | Two-keyframe stride 4 calls | Mean heat error, stride 2 → preview |
+|---|---:|---:|---:|
+| Slow walk | 16/32 | 9/32 | .01281 → .00621 |
+| Pedestrians | 20/32 | 20/32 | .00784 → .00334 |
+
+Against the same RGB-flow mask and reference stretch, mean frame-to-frame
+warp error was .00882 on the walk and .00608 on the pedestrians, versus
+.00996 and .00646 at full rate. These differences measure consistency with
+the full-rate model, not thermal accuracy; a softer render can score well.
+
+For end-to-end timing, we took 12 consecutive frames at 1 s in the original
+[720×720 walk][walk-video] (23.98 fps) and at 26 s in the
+[768×576 pedestrian video][pedestrian-video] (10 fps). Same Linux Xeon,
+eight Torch threads, bundled turbo4-cast checkpoint, cached SD-Turbo files,
+semantic prior and sensor simulation off. Wall time includes model loading,
+video decode and both color and raw outputs. All renders kept the original
+12 frames, size and frame rate.
+
+| Clip | Full rate, 512 px | Preview, 512 px | Draft, 256 px |
+|---|---:|---:|---:|
+| Slow walk | 163.6 s (12 calls) | 65.3 s (4 calls) | 21.6 s (4 calls) |
+| Pedestrians | 236.1 s (12 calls) | 221.2 s (11 calls) | 65.4 s (11 calls) |
+
+The 256 px draft was 3.6–7.6× faster. At the same 512 px working size,
+interpolation alone was 2.5× faster on the walk, but only 1.07× on the
+pedestrians because most frames required a fresh prediction. The 512 px
+preview's raw heat mean absolute deviation was .0072 on the walk and .0031
+on the pedestrians.
+
+The 256 px draft changes heat as well as fine detail: raw heat mean absolute
+deviation versus the 512 px full-rate export was .106 on the walk and .196
+on pedestrians (scale 0–1, decoded from the raw grayscale H.264). Inspect final
+heat and texture at the intended export settings. A 512 px channels-last
+CPU trial did not improve startup-to-export time on the walk, so the default
+tensor layout was not changed. No MPS or CUDA timings were taken for the draft.
+
+```sh
+export OMP_NUM_THREADS=8 MKL_NUM_THREADS=8
+fake-thermal clip.mp4 -o final.mp4 --engine turbo --device cpu --no-semantic --raw
+fake-thermal clip.mp4 -o draft.mp4 --engine turbo --device cpu --no-semantic --raw --turbo-preview
+fake-thermal clip.mp4 -o draft-detail.mp4 --engine turbo --device cpu --no-semantic --raw \
+  --turbo-preview --size 512
+```
+
 ## Turbo video stride and adapter fusion (22 Nov 2026)
 
 The earlier FLIR and corridor tests below already support default smoothing.

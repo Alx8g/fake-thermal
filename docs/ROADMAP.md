@@ -28,8 +28,10 @@ Next, in order of expected value:
    cuts, fast motion and temporal training remain open problems.
 4. **Speed.** Inference folds the LoRA adapters into the base weights; previous
    M1 Pro tests took about 2.5 s per vertical frame before this change.
-   Distilling it into a smaller student, or running it on a rented GPU for long clips, are the
-   options; realtime is out of reach for SD-Turbo-size models on a laptop.
+   The [turbo draft preset](EXPERIMENTS.md#two-keyframe-turbo-draft-preview-22-nov-2026)
+   reduces the model resolution and interpolates between keyframes for
+   editorial passes. Distilling into a smaller student or running on a GPU
+   are still options for full-rate exports.
 
 The phases below are the earlier plan (19-20 Nov), kept for the record.
 

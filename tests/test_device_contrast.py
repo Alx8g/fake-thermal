@@ -50,6 +50,10 @@ class DeviceTests(unittest.TestCase):
                 self.assertEqual(converter.call_args.kwargs['device'], 'cpu')
                 self.assertFalse(converter.call_args.kwargs['auto_contrast'])
                 self.assertIn('cpu', result[-1])
+                app.run_media(str(source), "ironbow", False, .65, False, False, .7, "cpu", True, True, False,
+                              engine='turbo', turbo_preview=True)
+                self.assertTrue(converter.call_args.kwargs['turbo_preview'])
+                self.assertIsNone(converter.call_args.kwargs['size'])
                 converter.side_effect = ValueError('invalid device')
                 with self.assertRaises(app.gr.Error):
                     app.run_media(str(source), "ironbow", False, .65, False, False, .7, "bad", True, True, True)

@@ -105,6 +105,7 @@ not been validated. See [media behavior and limitations](docs/INFERENCE.md).
 python -m pip install diffusers transformers peft mediapipe
 fake-thermal input.mov -o out.mp4 --engine turbo
 fake-thermal input.mov -o out.mp4 --engine turbo --turbo-weights path/to/turbo.pt --side-by-side
+fake-thermal input.mov -o draft.mp4 --engine turbo --turbo-preview
 ```
 
 The default U-Net engine is fast but its output stays visibly smooth. The
@@ -118,6 +119,14 @@ every frame. `--stride 2` can reuse motion-warped heat on alternate frames;
 it runs the model sooner if the scene cuts or the warp does not match the
 current image. It preserves the frame count and FPS, but the speedup depends
 on the footage. The default `--stride 1` still renders every frame.
+For a quick editorial pass, use `--turbo-preview` (or **Turbo draft preview**
+in the web UI). It renders at a 256 px working short side and uses motion
+from both neighboring keyframes between model predictions. It rerenders
+unmatched changes and never interpolates across detected cuts. Output size,
+frame rate and audio are unchanged; texture and heat can differ. It ran
+3.6–7.6× faster on [two CPU samples](docs/EXPERIMENTS.md#two-keyframe-turbo-draft-preview-22-nov-2026).
+Leave the option off for the full-quality export, or add `--size 512` to keep
+full working detail on the preview's keyframes.
 It downloads SD-Turbo (~5 GB) from Hugging Face on first use; check
 [SD-Turbo's licence](https://huggingface.co/stabilityai/sd-turbo) before any
 commercial use. With the turbo engine the semantic prior warms only people and
