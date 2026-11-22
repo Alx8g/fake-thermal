@@ -98,7 +98,8 @@ def generate(args):
     from fake_thermal.semantic import SemanticPrior, fuse_heat, guided_upsample
     from fake_thermal.sensor import ThermalSensor
     if args.engine == 'turbo':
-        predictor = TurboPredictor(args.weights, size=args.size, device=args.device, skip=args.skip)
+        predictor = TurboPredictor(args.weights, size=args.size, device=args.device, skip=args.skip,
+                                   camera=None if args.camera == 'auto' else args.camera)
         args.guided = False
     else:
         predictor = Predictor(weights=args.weights, size=args.size, device=args.device, threads=4)
@@ -109,6 +110,9 @@ def generate(args):
     for i, stem in enumerate(test_ids()):
         with Image.open(args.data / f'pairs/val/rgb/{stem}.jpg') as im:
             rgb = np.asarray(im.convert('RGB'))
+        if args.engine == 'turbo' and args.camera == 'auto':
+            from fake_thermal.turbo import source_prompt
+            predictor.prompt = source_prompt(stem)
         heat = predictor(rgb)
         if prior is not None:
             heat = fuse_heat(heat, *prior(rgb, heat.shape), args.semantic)
@@ -415,6 +419,9 @@ def main():
     p.add_argument('--no-guided', dest='guided', action='store_false')
     p.add_argument('--engine', choices=('unet', 'turbo'), default='unet')
     p.add_argument('--skip', type=float, default=1., help='turbo skip-connection strength')
+    p.add_argument('--camera', default='none',
+                   help='turbo camera prompt: none (generic), flir, kaist, llvip, or auto (each frame's own '
+                        'camera; flatters the paired test, report it beside none)')
     p.add_argument('--semantic', type=float, default=0., help='semantic prior strength (0 = off)')
     p.add_argument('--no-emissive', dest='emissive', action='store_false',
                    help='drop the flame/light colour heuristic from the semantic prior')

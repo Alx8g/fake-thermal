@@ -96,11 +96,21 @@ def autocast(device):
     return torch.autocast(device.type, dtype=dtype or torch.float16, enabled=dtype is not None)
 
 
-def save_grid(net, batch, path):
-    rgb, target, _ = batch
+def prompts_for(stems, camera_prompts, dropout=0.):
+    """One prompt per item: the frame's camera prompt, or the generic one when camera
+    prompts are off or for a ``dropout`` share of items (so the generic prompt keeps
+    working as the average look)."""
+    from fake_thermal.turbo import PROMPT, source_prompt
+    if not camera_prompts:
+        return PROMPT
+    return [PROMPT if random.random() < dropout else source_prompt(stem) for stem in stems]
+
+
+def save_grid(net, batch, path, camera_prompts=False):
+    rgb, target, stems = batch
     net.set_eval()
     with torch.no_grad(), autocast(net.device_name):
-        pred = net(rgb.to(net.device_name)).float().cpu()
+        pred = net(rgb.to(net.device_name), prompts_for(stems, camera_prompts)).float().cpu()
     tiles = []
     for i in range(len(rgb)):
         row = [rgb[i], (target[i] + 1) / 2, (pred[i] + 1) / 2]
@@ -126,6 +136,7 @@ def build_discriminator(kind, device):
 
 
 def generate(net, args):
+    from fake_thermal.turbo import PROMPT, source_prompt
     groups = json.loads(Path(args.ids).read_text())
     stems = [s for values in groups.values() for s in values]
     out = args.output / 'fake'
@@ -134,7 +145,8 @@ def generate(net, args):
     for stem in stems:
         with Image.open(Path(args.data) / f'pairs/val/rgb/{stem}.jpg') as im:
             rgb = np.asarray(im.convert('RGB'))
-        heat = net.translate(rgb, dtype=amp_dtype(net.device_name))
+        prompt = source_prompt(stem) if args.camera_prompts else PROMPT
+        heat = net.translate(rgb, dtype=amp_dtype(net.device_name), prompt=prompt)
         Image.fromarray(stretch8(heat)).save(out / f'{stem}.png')
     print(f'GENERATED {len(stems)} held-out frames to {out}', flush=True)
 
@@ -176,6 +188,15 @@ def main():
     parser.add_argument('--grid-every', type=int, default=250)
     parser.add_argument('--ids', type=Path, help='held-out realism ids to render at the end')
     parser.add_argument('--init', type=Path, help='continue from saved Turbo weights (fresh optimizers)')
+    parser.add_argument('--lora-rank-unet', type=int,
+                        help='UNet LoRA rank (new model default 8); above an --init model\'s rank its '
+                             'adapters are grown without changing its output')
+    parser.add_argument('--lora-rank-vae', type=int, help='VAE LoRA rank (new model default 4); grows like the UNet')
+    parser.add_argument('--camera-prompts', action='store_true',
+                        help='condition on the source camera (one prompt each for FLIR, KAIST, LLVIP) so the '
+                             'model learns each camera\'s look instead of their average')
+    parser.add_argument('--prompt-dropout', type=float, default=.15,
+                        help='with --camera-prompts, share of items trained with the generic prompt')
     parser.add_argument('--device', default='cuda')
     parser.add_argument('--no-checkpointing', dest='checkpointing', action='store_false')
     parser.add_argument('--vae-checkpointing-only', action='store_true',
@@ -198,9 +219,12 @@ def main():
     (args.output / 'config.json').write_text(json.dumps(
         {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}, indent=2) + '\n')
 
-    net = Pix2PixTurbo(device=device, weights=args.init)
+    net = Pix2PixTurbo(device=device, weights=args.init, lora_rank_unet=args.lora_rank_unet,
+                       lora_rank_vae=args.lora_rank_vae)
     if args.init:
         print(f'INIT weights from {args.init}', flush=True)
+    print(f'LORA rank unet={net.lora_rank_unet} alpha={net.lora_alpha_unet:g} '
+          f'vae={net.lora_rank_vae} alpha={net.lora_alpha_vae:g} camera_prompts={args.camera_prompts}', flush=True)
     net.set_train()
     if args.checkpointing and args.vae_checkpointing_only:
         net.vae.encoder.checkpointing = net.vae.decoder.checkpointing = True
@@ -243,11 +267,11 @@ def main():
 
     clock = time.perf_counter()
     for step in range(1, args.iters + 1):
-        rgb, target, _ = next(batches)
+        rgb, target, stems = next(batches)
         rgb, target = rgb.to(device, non_blocking=True), target.to(device, non_blocking=True)
         net.set_train()
         with autocast(device):
-            pred = net(rgb)
+            pred = net(rgb, prompts_for(stems, args.camera_prompts, args.prompt_dropout))
             l2 = F.mse_loss(pred.float(), target)
             lp = perceptual(pred.float(), target).mean()
             disc.requires_grad_(False)
@@ -294,7 +318,7 @@ def main():
                   f'g_adv={g_adv.item():.4f} d={d_loss.item():.4f}{pair} elapsed_s={elapsed:.0f} '
                   f'wall_s_per_iter={elapsed / step:.3f}', flush=True)
         if step % args.grid_every == 0 or step == args.iters:
-            save_grid(net, val_batch, args.output / f'val_{step:06d}.jpg')
+            save_grid(net, val_batch, args.output / f'val_{step:06d}.jpg', args.camera_prompts)
         if step % args.snapshot_every == 0 or step == args.iters:
             net.save_weights(args.output / f'snapshots/iter_{step:06d}.pt')
             print(f'CHECKPOINT iter={step}', flush=True)

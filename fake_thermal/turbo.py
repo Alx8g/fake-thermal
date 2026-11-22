@@ -20,6 +20,47 @@ VAE_TARGETS = ['conv1', 'conv2', 'conv_in', 'conv_shortcut', 'conv', 'conv_out',
 UNET_TARGETS = ['to_k', 'to_q', 'to_v', 'to_out.0', 'conv', 'conv1', 'conv2', 'conv_shortcut',
                 'conv_out', 'proj_in', 'proj_out', 'ff.net.2', 'ff.net.0.proj']
 PROMPT = 'a thermal infrared camera image, white hot'
+# Each training source is a different thermal camera with its own sharpness, noise
+# and contrast. Trained with one prompt per camera, the model can render one
+# camera's look instead of an average of all of them; PROMPT stays the generic one.
+CAMERA_PROMPTS = {'flir': PROMPT + ', FLIR ADAS vehicle camera',
+                  'kaist': PROMPT + ', KAIST multispectral vehicle rig',
+                  'llvip': PROMPT + ', LLVIP street surveillance camera'}
+SOURCE_CAMERA = {'flir': 'flir', 'video': 'flir', 'kaist': 'kaist', 'llvip': 'llvip'}
+PEFT_DEFAULT_ALPHA = 8
+
+
+def camera_prompt(camera=None):
+    """Prompt for a camera name (see CAMERA_PROMPTS); None or 'none' is the generic prompt."""
+    if camera in (None, '', 'none'):
+        return PROMPT
+    if camera not in CAMERA_PROMPTS:
+        raise ValueError(f'Unknown camera {camera!r}; choose from {sorted(CAMERA_PROMPTS)} or none')
+    return CAMERA_PROMPTS[camera]
+
+
+def source_prompt(stem):
+    """Camera prompt for a training or held-out frame id such as 'kaist_01234'."""
+    return camera_prompt(SOURCE_CAMERA[stem.split('_', 1)[0]])
+
+
+def grow_lora(state, rank, generator=None):
+    """Raise the rank of every LoRA pair in a state dict without changing what it computes.
+
+    lora_A (rank x in) gains rows with small random weights, lora_B (out x rank) gains
+    zero columns, so B @ A is unchanged and the new rank can still learn. The caller
+    must keep the LoRA scale (alpha / rank) the same, i.e. scale alpha with the rank."""
+    grown = {}
+    for key, value in state.items():
+        if '.lora_A.' in key and value.shape[0] < rank:
+            extra = torch.randn((rank - value.shape[0],) + tuple(value.shape[1:]), generator=generator,
+                                dtype=torch.float32).to(value.dtype) / rank
+            value = torch.cat([value, extra], 0)
+        elif '.lora_B.' in key and value.shape[1] < rank:
+            extra = torch.zeros((value.shape[0], rank - value.shape[1]) + tuple(value.shape[2:]), dtype=value.dtype)
+            value = torch.cat([value, extra], 1)
+        grown[key] = value
+    return grown
 
 
 def _run(module, block, *inputs):
@@ -60,7 +101,10 @@ class Pix2PixTurbo(nn.Module):
     """SD-Turbo UNet + VAE with LoRA adapters and encoder-to-decoder skip
     connections; a single denoising step maps the input latent to the output."""
 
-    def __init__(self, device='cuda', weights=None, lora_rank_unet=8, lora_rank_vae=4):
+    def __init__(self, device='cuda', weights=None, lora_rank_unet=None, lora_rank_vae=None):
+        """``lora_rank_*`` set the LoRA ranks of a new model (default 8 and 4). With
+        ``weights``, a rank above the saved one grows the saved adapters (see
+        ``grow_lora``) so training can continue with more capacity."""
         super().__init__()
         from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel
         from peft import LoraConfig
@@ -83,21 +127,32 @@ class Pix2PixTurbo(nn.Module):
         if weights is None:
             for name in ('skip_conv_1', 'skip_conv_2', 'skip_conv_3', 'skip_conv_4'):
                 nn.init.constant_(getattr(vae.decoder, name).weight, 1e-5)
-            rank_unet, rank_vae = lora_rank_unet, lora_rank_vae
+            rank_unet, rank_vae = lora_rank_unet or 8, lora_rank_vae or 4
+            alpha_unet = alpha_vae = PEFT_DEFAULT_ALPHA
             unet_targets, vae_targets = UNET_TARGETS, VAE_TARGETS
         else:
             state = torch.load(weights, map_location='cpu', weights_only=False)
             rank_unet, rank_vae = state['rank_unet'], state['rank_vae']
+            alpha_unet = state.get('alpha_unet', PEFT_DEFAULT_ALPHA)
+            alpha_vae = state.get('alpha_vae', PEFT_DEFAULT_ALPHA)
             unet_targets, vae_targets = state['unet_lora_target_modules'], state['vae_lora_target_modules']
-        vae.add_adapter(LoraConfig(r=rank_vae, init_lora_weights='gaussian', target_modules=vae_targets),
-                        adapter_name='vae_skip')
-        unet.add_adapter(LoraConfig(r=rank_unet, init_lora_weights='gaussian', target_modules=unet_targets))
+            if lora_rank_unet and lora_rank_unet > rank_unet:
+                state['state_dict_unet'] = grow_lora(state['state_dict_unet'], lora_rank_unet)
+                alpha_unet, rank_unet = alpha_unet * lora_rank_unet / rank_unet, lora_rank_unet
+            if lora_rank_vae and lora_rank_vae > rank_vae:
+                state['state_dict_vae'] = grow_lora(state['state_dict_vae'], lora_rank_vae)
+                alpha_vae, rank_vae = alpha_vae * lora_rank_vae / rank_vae, lora_rank_vae
+        vae.add_adapter(LoraConfig(r=rank_vae, lora_alpha=alpha_vae, init_lora_weights='gaussian',
+                                   target_modules=vae_targets), adapter_name='vae_skip')
+        unet.add_adapter(LoraConfig(r=rank_unet, lora_alpha=alpha_unet, init_lora_weights='gaussian',
+                                    target_modules=unet_targets))
         if weights is not None:
             for module, key in ((vae, 'state_dict_vae'), (unet, 'state_dict_unet')):
                 merged = module.state_dict()
                 merged.update(state[key])
                 module.load_state_dict(merged)
         self.lora_rank_unet, self.lora_rank_vae = rank_unet, rank_vae
+        self.lora_alpha_unet, self.lora_alpha_vae = alpha_unet, alpha_vae
         self.target_modules_unet, self.target_modules_vae = unet_targets, vae_targets
         self.unet, self.vae = unet, vae
         self.timesteps = torch.tensor([999], device=self.device_name).long()
@@ -145,8 +200,13 @@ class Pix2PixTurbo(nn.Module):
         return self._prompt_cache[prompt].expand(batch, -1, -1)
 
     def forward(self, rgb, prompt=PROMPT):
-        """rgb in [0, 1], Bx3xHxW with H, W multiples of 64; returns [-1, 1]."""
-        caption = self.encode_prompt(prompt, rgb.shape[0]).to(self.unet.dtype)
+        """rgb in [0, 1], Bx3xHxW with H, W multiples of 64; returns [-1, 1].
+        ``prompt`` is one string for the batch or one per item."""
+        if isinstance(prompt, str):
+            caption = self.encode_prompt(prompt, rgb.shape[0])
+        else:
+            caption = torch.cat([self.encode_prompt(p, 1) for p in prompt])
+        caption = caption.to(self.unet.dtype)
         latent = self.vae.encode(rgb * 2 - 1).latent_dist.mode() * self.vae.config.scaling_factor
         prediction = self.unet(latent, self.timesteps, encoder_hidden_states=caption).sample
         denoised = self.sched.step(prediction, self.timesteps, latent, return_dict=True).prev_sample
@@ -157,6 +217,7 @@ class Pix2PixTurbo(nn.Module):
         state = {'unet_lora_target_modules': self.target_modules_unet,
                  'vae_lora_target_modules': self.target_modules_vae,
                  'rank_unet': self.lora_rank_unet, 'rank_vae': self.lora_rank_vae,
+                 'alpha_unet': self.lora_alpha_unet, 'alpha_vae': self.lora_alpha_vae,
                  'state_dict_unet': {k: v.detach().cpu() for k, v in self.unet.state_dict().items()
                                      if 'lora' in k or 'conv_in' in k},
                  'state_dict_vae': {k: v.detach().cpu() for k, v in self.vae.state_dict().items()
@@ -166,10 +227,11 @@ class Pix2PixTurbo(nn.Module):
         temporary.replace(path)
 
     @torch.no_grad()
-    def translate(self, rgb, dtype=None, skip=1.):
+    def translate(self, rgb, dtype=None, skip=1., prompt=PROMPT):
         """HxWx3 uint8 RGB to an HxW thermal map in [0, 1] (any frame size).
         ``skip`` scales the encoder-to-decoder skip activations: below 1 it
-        passes less fine RGB structure (paint, glare, glass) into the output."""
+        passes less fine RGB structure (paint, glare, glass) into the output.
+        ``prompt`` picks a camera look on models trained with camera prompts."""
         import numpy as np
         from torch.nn import functional as F
         h, w = rgb.shape[:2]
@@ -181,7 +243,7 @@ class Pix2PixTurbo(nn.Module):
         autocast = dtype is not None and weights == torch.float32
         try:
             with torch.autocast(self.device_name.type, dtype=dtype or torch.float16, enabled=autocast):
-                y = self.forward(x).float()
+                y = self.forward(x, prompt).float()
         finally:
             self.vae.decoder.gamma = 1
         return ((y[0].mean(0)[:h, :w] + 1) / 2).clamp(0, 1).cpu().numpy()
