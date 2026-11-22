@@ -1,5 +1,6 @@
 """Shared per-user installer, run only with the bootstrapped managed Python."""
 import argparse
+import ctypes
 import importlib.util
 import os
 from pathlib import Path
@@ -25,6 +26,11 @@ def download(url, path):
         urllib.request.urlretrieve(url, path)
 
 
+def notify_path_change():
+    result = ctypes.c_size_t()
+    ctypes.windll.user32.SendMessageTimeoutW(65535, 26, 0, 'Environment', 2, 5000, ctypes.byref(result))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('root', 'uv', 'source'):
@@ -47,6 +53,7 @@ def main():
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment', 0, winreg.KEY_ALL_ACCESS) as key:
                 value = winreg.QueryValueEx(key, 'Path')[0]
                 winreg.SetValueEx(key, 'Path', 0, winreg.REG_EXPAND_SZ, ';'.join(p for p in value.split(';') if p.lower() != str(bindir).lower()))
+            notify_path_change()
         else:
             link = Path.home() / '.local/bin/fake-thermal'
             if link.is_symlink() and link.resolve() == cli.resolve():
@@ -108,6 +115,7 @@ def main():
                 value = ''
             if str(bindir).lower() not in [p.lower() for p in value.split(';')]:
                 winreg.SetValueEx(key, 'Path', 0, winreg.REG_EXPAND_SZ, value.rstrip(';') + ';' + str(bindir))
+        notify_path_change()
     else:
         link = Path.home() / '.local/bin/fake-thermal'
         link.parent.mkdir(parents=True, exist_ok=True)
