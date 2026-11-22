@@ -37,7 +37,7 @@ var FakeThermal = (function () {
                     if (Math.abs(speed - 1) > 0.00001 || item.isSpeedReversed()) throw new Error('Speed-adjusted clips are unsupported. Render and replace them first.');
                     clips.push({mediaPath: media, sourceIn: item.inPoint.seconds, sourceOut: item.outPoint.seconds,
                         timelineStart: item.start.seconds, timelineEnd: item.end.seconds, trackIndex: i,
-                        sequenceId: String(seq.sequenceID), still: /\.(png|jpe?g|webp|tiff?|bmp|psd)$/i.test(media)});
+                        sequenceId: String(seq.sequenceID), still: /\.(png|jpe?g|webp|tiff?|bmp|psd|tga|gif)$/i.test(media)});
                 }
             }
             if (!clips.length) throw new Error('Select one or more video clips on the timeline.');
