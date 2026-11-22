@@ -332,8 +332,6 @@ class TurboPredictor:
         self.dtype = torch.float16 if self.device.type in ('cuda', 'mps') else None
         if self.device.type == 'mps':
             self.net.half()  # faster than autocast on Apple GPUs
-        elif self.device.type == 'cpu' and torch.backends.mkldnn.is_available():
-            self.net.to(memory_format=memory_format(self.device))
 
     def __call__(self, rgb):
         h, w = rgb.shape[:2]

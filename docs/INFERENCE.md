@@ -75,8 +75,9 @@ all local network interfaces; use only on a trusted machine/network.
   `--size` and `--stride` override the preset; lookahead is capped at six
   frames. `--stride 1` or `--no-flow-smoothing` predicts every frame at the
   selected size. Images use the selected size without interpolation.
-  Drafts can soften small features or miss motion; turn the preset off for
-  a full-quality export.
+  Drafts can soften small features or change heat. Fast motion can trigger
+  nearly full-rate prediction, even with a higher stride. Turn the preset
+  off for a full-quality export. See [draft results](EXPERIMENTS.md#two-keyframe-turbo-draft-preview-22-nov-2026).
 - Semantic priors default on at strength .7. `--no-semantic` disables semantic
   and emissive priors; `--semantic-strength 0` also bypasses segmentation.
   DeepLabV3 MobileNetV3 runs at 320px short side, using the pretrained

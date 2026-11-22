@@ -123,9 +123,10 @@ For a quick editorial pass, use `--turbo-preview` (or **Turbo draft preview**
 in the web UI). It renders at a 256 px working short side and uses motion
 from both neighboring keyframes between model predictions. It rerenders
 unmatched changes and never interpolates across detected cuts. Output size,
-frame rate and audio are unchanged; detail is softer. Leave the option off
-for the full-quality export, or add `--size 512` to keep full working detail
-on the preview's keyframes.
+frame rate and audio are unchanged; texture and heat can differ. It ran
+3.6–7.6× faster on [two CPU samples](docs/EXPERIMENTS.md#two-keyframe-turbo-draft-preview-22-nov-2026).
+Leave the option off for the full-quality export, or add `--size 512` to keep
+full working detail on the preview's keyframes.
 It downloads SD-Turbo (~5 GB) from Hugging Face on first use; check
 [SD-Turbo's licence](https://huggingface.co/stabilityai/sd-turbo) before any
 commercial use. With the turbo engine the semantic prior warms only people and
