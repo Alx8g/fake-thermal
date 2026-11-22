@@ -2,8 +2,10 @@
 import argparse
 from fractions import Fraction
 import json
+import shutil
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -374,10 +376,16 @@ def encoder(path, w, h, fps):
                              str(path)], stdin=subprocess.PIPE)
 
 
-def mux_audio(video, original, output):
-    command = ['ffmpeg', '-v', 'error', '-y', '-threads', '1', '-i', str(video), '-i', str(original),
+def range_args(start, duration):
+    return (['-ss', str(start)] if start else []) + (['-t', str(duration)] if duration is not None else [])
+
+
+def mux_audio(video, original, output, start=0, duration=None):
+    command = ['ffmpeg', '-v', 'error', '-y', '-threads', '1', '-i', str(video),
+               *range_args(start, duration), '-i', str(original),
                '-map', '0:v:0', '-map', '1:a:0?', '-c:v', 'copy', '-c:a']
-    result = subprocess.run(command + ['copy', '-movflags', '+faststart', str(output)], capture_output=True)
+    codec = 'aac' if start or duration is not None else 'copy'
+    result = subprocess.run(command + [codec, '-movflags', '+faststart', str(output)], capture_output=True)
     if result.returncode:
         subprocess.run(command + ['aac', '-b:a', '192k', '-threads', '1', '-movflags', '+faststart',
                                   str(output)], check=True)
@@ -394,8 +402,12 @@ def convert(input_path, output_path, palette='ironbow', size=None, side_by_side=
             weights=DEFAULT_WEIGHTS, smoothing=.65, raw=False, threads=2,
             semantic=True, semantic_strength=.7, device='auto', auto_contrast=True,
             flow=True, sensor=True, engine='unet', turbo_weights=DEFAULT_TURBO_WEIGHTS, stride=None,
-            *, turbo_preview=False):
-    start = time.perf_counter()
+            *, turbo_preview=False, start=0, duration=None, progress_json=False, no_audio=False):
+    started = time.perf_counter()
+    if not np.isfinite(start) or start < 0:
+        raise ValueError('Start must be finite and nonnegative')
+    if duration is not None and (not np.isfinite(duration) or duration <= 0):
+        raise ValueError('Duration must be finite and positive')
     source, output = Path(input_path), Path(output_path)
     if source.resolve() == output.resolve():
         raise ValueError('Input and output must be different files')
@@ -454,6 +466,8 @@ def convert(input_path, output_path, palette='ironbow', size=None, side_by_side=
     except (OSError, ValueError):
         rgb = None
     if rgb is not None:
+        if start or duration is not None:
+            raise ValueError('Start and duration are only supported for video')
         if output.suffix.lower() not in ('.png', '.jpg', '.jpeg', '.webp'):
             raise ValueError('For an image, use a .png/.jpg/.webp output')
         raw_path = output.with_name(output.stem + '_raw.png') if raw else None
@@ -467,8 +481,15 @@ def convert(input_path, output_path, palette='ironbow', size=None, side_by_side=
         if raw:
             Image.fromarray(np.rint(heat * 255).astype(np.uint8)).save(raw_path)
         frames = 1
+        if progress_json:
+            print(json.dumps({'frame': 1, 'total': 1}), file=sys.stderr, flush=True)
     else:
         w, h, fps, total = probe(source)
+        if total:
+            total = max(0, total - round(start * float(Fraction(fps))))
+        if duration is not None:
+            count = round(duration * float(Fraction(fps)))
+            total = min(total, count) if total else count
         if output.suffix.lower() != '.mp4':
             raise ValueError('Video output must be .mp4')
         if raw_path is not None and source.resolve() == raw_path.resolve():
@@ -478,14 +499,15 @@ def convert(input_path, output_path, palette='ironbow', size=None, side_by_side=
         with tempfile.TemporaryDirectory(prefix='fake-thermal-', dir=output.parent) as temporary:
             temp = Path(temporary)
             with (temp / 'decode.log').open('wb') as errors:
-                decoder = subprocess.Popen(['ffmpeg', '-v', 'error', '-threads', '1', '-filter_threads', '1', '-i', str(source),
+                decoder = subprocess.Popen(['ffmpeg', '-v', 'error', '-threads', '1', '-filter_threads', '1',
+                                             *range_args(start, None), '-i', str(source), *range_args(0, duration),
                                              '-map', '0:v:0', '-an', *fps_mode_args(),
                                              '-threads', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'],
                                             stdout=subprocess.PIPE, stderr=errors)
                 enc = encoder(temp / 'color.mp4', w * (2 if side_by_side else 1), h, fps)
                 raw_enc = encoder(temp / 'raw.mp4', w, h, fps) if raw else None
                 try:
-                    with tqdm(total=total or None, unit='frame', desc='Thermalizing') as bar:
+                    with tqdm(total=total or None, unit='frame', desc='Thermalizing', disable=progress_json) as bar:
                         decoded = read_video_frames(decoder.stdout, w, h)
                         lookahead = turbo_preview and flow and stride > 1
                         samples = (preview_frames(decoded, predict_heat, stride, smoother.threshold)
@@ -509,6 +531,8 @@ def convert(input_path, output_path, palette='ironbow', size=None, side_by_side=
                                 raw_enc.stdin.write(np.repeat(gray[..., None], 3, axis=2).tobytes())
                             frames += 1
                             bar.update()
+                            if progress_json:
+                                print(json.dumps({'frame': frames, 'total': total}), file=sys.stderr, flush=True)
                     if decoder.wait() != 0:
                         raise ValueError(UNREADABLE_MEDIA)
                     if frames == 0:
@@ -520,9 +544,14 @@ def convert(input_path, output_path, palette='ironbow', size=None, side_by_side=
                         raw_enc.stdin.close()
                         if raw_enc.wait() != 0:
                             raise RuntimeError('Raw video encoding failed')
-                    mux_audio(temp / 'color.mp4', source, output)
-                    if raw:
-                        mux_audio(temp / 'raw.mp4', source, raw_path)
+                    if no_audio:
+                        shutil.copyfile(temp / 'color.mp4', output)
+                        if raw:
+                            shutil.copyfile(temp / 'raw.mp4', raw_path)
+                    else:
+                        mux_audio(temp / 'color.mp4', source, output, start, duration)
+                        if raw:
+                            mux_audio(temp / 'raw.mp4', source, raw_path, start, duration)
                 finally:
                     decoder.stdout.close()
                     for process in (decoder, enc, raw_enc):
@@ -534,11 +563,13 @@ def convert(input_path, output_path, palette='ironbow', size=None, side_by_side=
                             except subprocess.TimeoutExpired:
                                 process.kill()
                                 process.wait()
-    elapsed = time.perf_counter() - start
+    elapsed = time.perf_counter() - started
     stats = {'frames': frames, 'model_frames': model_frames, 'seconds': elapsed, 'fps': frames / elapsed,
              'output': str(output), 'raw': str(raw_path) if raw_path else None,
              'device': selected_device.type}
     print(json.dumps(stats), flush=True)
+    if progress_json:
+        print(json.dumps({'done': True, 'output': str(output)}), file=sys.stderr, flush=True)
     return stats
 
 
@@ -554,6 +585,10 @@ def main():
     parser.add_argument('--size', type=int, default=None,
                         help='working short side (default 384 for unet, 512 for turbo)')
     parser.add_argument('--side-by-side', action='store_true')
+    parser.add_argument('--start', type=float, default=0, help='video source start in seconds')
+    parser.add_argument('--duration', type=float, help='video source duration in seconds')
+    parser.add_argument('--progress-json', action='store_true', help='JSON progress lines on stderr')
+    parser.add_argument('--no-audio', action='store_true', help='omit audio from video outputs')
     parser.add_argument('--weights', type=Path, default=DEFAULT_WEIGHTS)
     parser.add_argument('--smoothing', type=float, default=.65, help='previous-frame weight, [0,1); 0 disables')
     parser.add_argument('--raw', action='store_true')
@@ -585,7 +620,8 @@ def main():
                 args.weights, args.smoothing, args.raw, args.threads,
                 args.semantic, args.semantic_strength, args.device, args.auto_contrast,
                 args.flow_smoothing, args.sensor_sim, args.engine, args.turbo_weights, args.stride,
-                turbo_preview=args.turbo_preview)
+                turbo_preview=args.turbo_preview, start=args.start, duration=args.duration,
+                progress_json=args.progress_json, no_audio=args.no_audio)
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
         parser.exit(1, f'fake-thermal: {error}\n')
 

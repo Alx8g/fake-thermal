@@ -1,0 +1,14 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Fake Thermal</title><link rel="stylesheet" href="css/panel.css"></head>
+<body><h1>Fake Thermal</h1><p>Offline renders · synthetic heat, not temperature</p>
+<label>Engine<select id="engine"><option value="unet">U-Net · fast</option><option value="turbo">Turbo · photographic</option></select></label>
+<label>Palette<select id="palette"></select></label>
+<label class="check"><input id="preview" type="checkbox">Turbo draft preview</label>
+<p>Thermal only · side-by-side off</p>
+<label class="check"><input id="usedRange" type="checkbox" checked>Render only the clip's used range</label>
+<label>CLI command path<input id="command" placeholder="Auto-find fake-thermal"></label>
+<label>Output folder<input id="folder" placeholder="Next to the saved project"></label>
+<p>Normal-speed, forward clips only. Select video clips, then Apply.</p>
+<div><button id="apply">Apply</button><button id="cancel" disabled>Cancel</button></div>
+<progress id="progress" max="100" value="0"></progress><pre id="status" role="status">Ready</pre>
+<script src="js/panel.js"></script></body></html>
