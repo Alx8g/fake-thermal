@@ -75,6 +75,9 @@ el('apply').onclick = async () => {
         if (!folder) {
             if (!selection.projectPath) throw new Error('Save the project or choose an output folder first.');
             folder = path.join(path.dirname(selection.projectPath), 'Fake Thermal Renders');
+        } else if (!path.isAbsolute(folder)) {
+            if (!selection.projectPath) throw new Error('Use an absolute output folder or save the project first.');
+            folder = path.resolve(path.dirname(selection.projectPath), folder);
         }
         fs.mkdirSync(folder, {recursive: true});
         localStorage.setItem('fakeThermalCommand', settings.command);
