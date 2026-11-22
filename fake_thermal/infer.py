@@ -45,14 +45,14 @@ class TemporalSmoother:
             raise ValueError('Smoothing must be in [0, 1)')
         self.smoothing, self.threshold = smoothing, cut_threshold
         self.flow, self.tolerance = flow, tolerance
-        self.previous, self.scene, self.scene_gray = None, None, None
+        self.previous, self.scene, self.scene_gray, self.scene_rgb = None, None, None, None
         self.reset_history = True
 
     def update(self, heat, rgb):
         scene = cv2.resize(rgb, (64, 64), interpolation=cv2.INTER_AREA).astype(np.float32) / 255
         cut = self.scene is not None and np.abs(scene - self.scene).mean() > self.threshold
         self.reset_history = self.previous is None or cut or self.previous.shape != heat.shape
-        current = None
+        current = small = None
         if self.flow:
             small = cv2.resize(rgb, flow_grid(heat.shape), interpolation=cv2.INTER_AREA)
             current = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
@@ -63,28 +63,39 @@ class TemporalSmoother:
         else:
             result = self.propagate(heat, current, self.scene_gray)
         self.previous, self.scene = result, scene
-        self.scene_gray = current
+        self.scene_gray, self.scene_rgb = current, small
         return result
 
     def carry(self, rgb):
         """The previous heat map carried along the estimated motion to this frame,
-        with no new prediction (``--stride``); None when there is no history, the
-        scene cut or flow smoothing is off, so the caller must predict."""
+        with no new prediction (``--stride``). Return None without changing
+        history when a fresh prediction is needed."""
         if self.previous is None or not self.flow:
             return None
         scene = cv2.resize(rgb, (64, 64), interpolation=cv2.INTER_AREA).astype(np.float32) / 255
         if np.abs(scene - self.scene).mean() > self.threshold:
             return None
         small = cv2.resize(rgb, flow_grid(self.previous.shape), interpolation=cv2.INTER_AREA)
+        if np.array_equal(small, self.scene_rgb):
+            self.scene = scene
+            self.reset_history = False
+            return self.previous
         current = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
         h, w = self.previous.shape
         back = optical_flow(current, self.scene_gray)
-        gx, gy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+        aligned = cv2.remap(self.scene_rgb, *flow_coordinates(back),
+                            interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        residual = cv2.absdiff(small, aligned).mean(axis=2, dtype=np.float32)
+        # A local check catches a small moving subject that a whole-frame mean misses.
+        window = max(8, min(back.shape[:2]) // 12)
+        if cv2.blur(residual, (window, window)).max() > 20:
+            return None
         scale = np.float32([w / back.shape[1], h / back.shape[0]])
         back_full = cv2.resize(back, (w, h), interpolation=cv2.INTER_LINEAR) * scale
-        result = cv2.remap(self.previous, gx + back_full[..., 0], gy + back_full[..., 1],
+        result = cv2.remap(self.previous, *flow_coordinates(back_full),
                            interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
         self.previous, self.scene, self.scene_gray = result, scene, current
+        self.scene_rgb = small
         self.reset_history = False
         return result
 
@@ -98,11 +109,9 @@ class TemporalSmoother:
         else:
             fore = optical_flow(previous, current)
             mask = consistent_mask(back, fore, self.tolerance)
-        gx, gy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
         scale = np.float32([w / back.shape[1], h / back.shape[0]])
         back_full = cv2.resize(back, (w, h), interpolation=cv2.INTER_LINEAR) * scale
-        x = gx + back_full[..., 0]
-        y = gy + back_full[..., 1]
+        x, y = flow_coordinates(back_full)
         inside = ((x >= 0) & (x <= w - 1) & (y >= 0) & (y <= h - 1)).astype(np.float32)
         warped = cv2.remap(self.previous, x, y, interpolation=cv2.INTER_LINEAR,
                            borderMode=cv2.BORDER_REPLICATE)
@@ -119,6 +128,12 @@ def flow_grid(shape):
 def optical_flow(source, target):
     """Farneback displacement field taking pixels of `source` to `target`."""
     return cv2.calcOpticalFlowFarneback(source, target, None, .5, 3, 21, 3, 5, 1.2, 0)
+
+
+def flow_coordinates(flow):
+    h, w = flow.shape[:2]
+    x, y = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    return x + flow[..., 0], y + flow[..., 1]
 
 
 def consistent_mask(back, fore, tolerance=1.5):
@@ -237,7 +252,7 @@ class TurboPredictor:
             raise FileNotFoundError(f'Turbo weights not found: {weights}')
         self.size, self.skip, self.destripe = size, skip, destripe
         self.device = select_device(device)
-        self.net = Pix2PixTurbo(device=self.device, weights=weights)
+        self.net = Pix2PixTurbo(device=self.device, weights=weights, fuse=True)
         self.net.set_eval()
         self.dtype = torch.float16 if self.device.type in ('cuda', 'mps') else None
         if self.device.type == 'mps':
@@ -329,8 +344,11 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
                                         sharp=not unet, parts=True)
                           if semantic and semantic_strength > 0 else None)
     normalizer = DisplayNormalizer() if auto_contrast else None
+    model_frames = 0
 
     def predict_heat(rgb):
+        nonlocal model_frames
+        model_frames += 1
         heat = predictor(rgb)
         if semantic_predictor is not None:
             prior, confidence = semantic_predictor(rgb, heat.shape)
@@ -365,6 +383,7 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
         if raw_path is not None and source.resolve() == raw_path.resolve():
             raise ValueError('Input and raw output must be different files')
         frames = 0
+        next_prediction = 0
         with tempfile.TemporaryDirectory(prefix='fake-thermal-', dir=output.parent) as temporary:
             temp = Path(temporary)
             with (temp / 'decode.log').open('wb') as errors:
@@ -383,8 +402,10 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
                             if len(buffer) != w * h * 3:
                                 raise ValueError(UNREADABLE_MEDIA)
                             rgb = np.frombuffer(buffer, dtype=np.uint8).reshape(h, w, 3)
-                            carried = smoother.carry(rgb) if frames % stride else None
-                            heat = carried if carried is not None else smoother.update(predict_heat(rgb), rgb)
+                            heat = smoother.carry(rgb) if frames < next_prediction else None
+                            if heat is None:
+                                heat = smoother.update(predict_heat(rgb), rgb)
+                                next_prediction = frames + stride
                             heat = upsample(heat, rgb)
                             if sensor_sim is not None:
                                 heat = sensor_sim.update(heat)
@@ -411,6 +432,7 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
                     if raw:
                         mux_audio(temp / 'raw.mp4', source, raw_path)
                 finally:
+                    decoder.stdout.close()
                     for process in (decoder, enc, raw_enc):
                         if process is not None:
                             if process.poll() is None:
@@ -421,7 +443,7 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
                                 process.kill()
                                 process.wait()
     elapsed = time.perf_counter() - start
-    stats = {'frames': frames, 'seconds': elapsed, 'fps': frames / elapsed,
+    stats = {'frames': frames, 'model_frames': model_frames, 'seconds': elapsed, 'fps': frames / elapsed,
              'output': str(output), 'raw': str(raw_path) if raw_path else None,
              'device': selected_device.type}
     print(json.dumps(stats), flush=True)
@@ -453,9 +475,8 @@ def main():
     parser.add_argument('--flow-smoothing', action=argparse.BooleanOptionalAction, default=True,
                         help='carry the previous heat map along estimated motion with occlusion masking (default on)')
     parser.add_argument('--stride', type=int, default=1,
-                        help='run the model on every Nth video frame and carry the heat map along the '
-                             'estimated motion in between; 2 nearly halves turbo render time, fast motion '
-                             'can smear (default 1: every frame)')
+                        help='max frames between model predictions; reuse heat when motion tracks, '
+                             'refresh early on cuts or unreliable motion (default 1: every frame)')
     parser.add_argument('--sensor-sim', action=argparse.BooleanOptionalAction, default=None,
                         help='simulated microbolometer noise, banding and vignette (default on for unet, '
                              'off for turbo, which synthesizes its own sensor texture)')
