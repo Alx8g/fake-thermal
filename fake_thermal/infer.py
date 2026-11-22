@@ -49,7 +49,7 @@ class TemporalSmoother:
         self.reset_history = True
 
     def update(self, heat, rgb):
-        scene = cv2.resize(rgb, (64, 64), interpolation=cv2.INTER_AREA).astype(np.float32) / 255
+        scene = scene_signature(rgb)
         cut = self.scene is not None and np.abs(scene - self.scene).mean() > self.threshold
         self.reset_history = self.previous is None or cut or self.previous.shape != heat.shape
         current = small = None
@@ -72,7 +72,7 @@ class TemporalSmoother:
         history when a fresh prediction is needed."""
         if self.previous is None or not self.flow:
             return None
-        scene = cv2.resize(rgb, (64, 64), interpolation=cv2.INTER_AREA).astype(np.float32) / 255
+        scene = scene_signature(rgb)
         if np.abs(scene - self.scene).mean() > self.threshold:
             return None
         small = cv2.resize(rgb, flow_grid(self.previous.shape), interpolation=cv2.INTER_AREA)
@@ -81,19 +81,10 @@ class TemporalSmoother:
             self.reset_history = False
             return self.previous
         current = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
-        h, w = self.previous.shape
-        back = optical_flow(current, self.scene_gray)
-        aligned = cv2.remap(self.scene_rgb, *flow_coordinates(back),
-                            interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
-        residual = cv2.absdiff(small, aligned).mean(axis=2, dtype=np.float32)
-        # A local check catches a small moving subject that a whole-frame mean misses.
-        window = max(4, min(back.shape[:2]) // 10)
-        if cv2.blur(residual, (window, window)).max() > 20:
+        back, residual = tracked_flow(small, current, self.scene_rgb, self.scene_gray)
+        if residual.max() > MAX_WARP_ERROR:
             return None
-        scale = np.float32([w / back.shape[1], h / back.shape[0]])
-        back_full = cv2.resize(back, (w, h), interpolation=cv2.INTER_LINEAR) * scale
-        result = cv2.remap(self.previous, *flow_coordinates(back_full),
-                           interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+        result = warp_heat(self.previous, back)
         self.previous, self.scene, self.scene_gray = result, scene, current
         self.scene_rgb = small
         self.reset_history = False
@@ -117,6 +108,90 @@ class TemporalSmoother:
                            borderMode=cv2.BORDER_REPLICATE)
         alpha = self.smoothing * (cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR) * inside)
         return alpha * warped + (1 - alpha) * heat
+
+
+MAX_WARP_ERROR = 20
+TURBO_PREVIEW_SIZE = 256
+TURBO_PREVIEW_STRIDE = 4
+MAX_PREVIEW_STRIDE = 6
+
+
+def scene_signature(rgb):
+    return cv2.resize(rgb, (64, 64), interpolation=cv2.INTER_AREA).astype(np.float32) / 255
+
+
+def tracked_flow(rgb, gray, reference, reference_gray):
+    back = optical_flow(gray, reference_gray)
+    aligned = cv2.remap(reference, *flow_coordinates(back), cv2.INTER_LINEAR,
+                        borderMode=cv2.BORDER_REPLICATE)
+    residual = cv2.absdiff(rgb, aligned).mean(axis=2, dtype=np.float32)
+    # Local error catches small subjects that a whole-frame mean misses.
+    window = max(4, min(back.shape[:2]) // 10)
+    return back, cv2.blur(residual, (window, window))
+
+
+def warp_heat(heat, back):
+    h, w = heat.shape
+    scale = np.float32([w / back.shape[1], h / back.shape[0]])
+    full = cv2.resize(back, (w, h), interpolation=cv2.INTER_LINEAR) * scale
+    return cv2.remap(heat, *flow_coordinates(full), cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+
+
+def preview_span(anchor, pending, predict):
+    """Resolve frames through the next keyframe, then return it as the next anchor."""
+    right_rgb = pending[-1]
+    right_heat = predict(right_rgb)
+    if len(pending) > 1:
+        left_rgb, left_heat = anchor
+        grid = flow_grid(left_heat.shape)
+
+        def motion_input(rgb):
+            small = cv2.resize(rgb, grid, interpolation=cv2.INTER_AREA)
+            return small, cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
+
+        left, right = motion_input(left_rgb), motion_input(right_rgb)
+        left_index = 0
+        for index, rgb in enumerate(pending[:-1], 1):
+            current = motion_input(rgb)
+            before, a = tracked_flow(*current, *left)
+            after, b = tracked_flow(*current, *right)
+            if np.minimum(a, b).max() > MAX_WARP_ERROR:
+                heat = predict(rgb)
+                left, left_heat, left_index = current, heat, index
+            else:
+                alpha = (index - left_index) / (len(pending) - left_index)
+                # Weight each anchor by local match and temporal distance.
+                wa = np.maximum(0, MAX_WARP_ERROR + 2 - a) * (1 - alpha)
+                wb = np.maximum(0, MAX_WARP_ERROR + 2 - b) * alpha
+                weight = cv2.resize(wa / (wa + wb), left_heat.shape[::-1], interpolation=cv2.INTER_LINEAR)
+                heat = weight * warp_heat(left_heat, before) + (1 - weight) * warp_heat(right_heat, after)
+            yield rgb, heat
+    yield right_rgb, right_heat
+    return right_rgb, right_heat
+
+
+def preview_frames(frames, predict, stride, cut_threshold):
+    first = next(frames, None)
+    if first is None:
+        return
+    anchor = first, predict(first)
+    yield anchor
+    scene = scene_signature(first)
+    pending = []
+    for rgb in frames:
+        signature = scene_signature(rgb)
+        cut = np.abs(signature - scene).mean() > cut_threshold
+        scene = signature
+        if not cut:
+            pending.append(rgb)
+        if pending and (cut or len(pending) == stride):
+            anchor = yield from preview_span(anchor, pending, predict)
+            pending.clear()
+        if cut:
+            anchor = rgb, predict(rgb)
+            yield anchor
+    if pending:
+        yield from preview_span(anchor, pending, predict)
 
 
 def flow_grid(shape):
@@ -257,6 +332,8 @@ class TurboPredictor:
         self.dtype = torch.float16 if self.device.type in ('cuda', 'mps') else None
         if self.device.type == 'mps':
             self.net.half()  # faster than autocast on Apple GPUs
+        elif self.device.type == 'cpu' and torch.backends.mkldnn.is_available():
+            self.net.to(memory_format=memory_format(self.device))
 
     def __call__(self, rgb):
         h, w = rgb.shape[:2]
@@ -308,10 +385,18 @@ def mux_audio(video, original, output):
                                   str(output)], check=True)
 
 
-def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=False,
+def read_video_frames(stream, w, h):
+    while buffer := stream.read(w * h * 3):
+        if len(buffer) != w * h * 3:
+            raise ValueError(UNREADABLE_MEDIA)
+        yield np.frombuffer(buffer, dtype=np.uint8).reshape(h, w, 3)
+
+
+def convert(input_path, output_path, palette='ironbow', size=None, side_by_side=False,
             weights=DEFAULT_WEIGHTS, smoothing=.65, raw=False, threads=2,
             semantic=True, semantic_strength=.7, device='auto', auto_contrast=True,
-            flow=True, sensor=True, engine='unet', turbo_weights=DEFAULT_TURBO_WEIGHTS, stride=1):
+            flow=True, sensor=True, engine='unet', turbo_weights=DEFAULT_TURBO_WEIGHTS, stride=None,
+            *, turbo_preview=False):
     start = time.perf_counter()
     source, output = Path(input_path), Path(output_path)
     if source.resolve() == output.resolve():
@@ -322,10 +407,18 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
         raise ValueError(f'Unknown palette: {palette}')
     if engine not in ENGINES:
         raise ValueError(f'Unknown engine: {engine}')
+    if turbo_preview and engine != 'turbo':
+        raise ValueError('Turbo preview requires the turbo engine')
     if not np.isfinite(semantic_strength) or not 0 <= semantic_strength <= 1:
         raise ValueError('Semantic strength must be between 0 and 1')
+    if size is None:
+        size = TURBO_PREVIEW_SIZE if turbo_preview else 384
+    if stride is None:
+        stride = TURBO_PREVIEW_STRIDE if turbo_preview else 1
     if stride < 1:
         raise ValueError('Stride must be at least 1')
+    if turbo_preview and stride > MAX_PREVIEW_STRIDE:
+        raise ValueError(f'Turbo preview supports stride up to {MAX_PREVIEW_STRIDE}')
     smoother = TemporalSmoother(smoothing, flow=flow)
     selected_device = select_device(device)
     sensor_sim = ThermalSensor() if sensor else None
@@ -395,17 +488,18 @@ def convert(input_path, output_path, palette='ironbow', size=384, side_by_side=F
                 raw_enc = encoder(temp / 'raw.mp4', w, h, fps) if raw else None
                 try:
                     with tqdm(total=total or None, unit='frame', desc='Thermalizing') as bar:
-                        while True:
-                            buffer = decoder.stdout.read(w * h * 3)
-                            if not buffer:
-                                break
-                            if len(buffer) != w * h * 3:
-                                raise ValueError(UNREADABLE_MEDIA)
-                            rgb = np.frombuffer(buffer, dtype=np.uint8).reshape(h, w, 3)
-                            heat = smoother.carry(rgb) if frames < next_prediction else None
-                            if heat is None:
-                                heat = smoother.update(predict_heat(rgb), rgb)
-                                next_prediction = frames + stride
+                        decoded = read_video_frames(decoder.stdout, w, h)
+                        lookahead = turbo_preview and flow and stride > 1
+                        samples = (preview_frames(decoded, predict_heat, stride, smoother.threshold)
+                                   if lookahead else ((rgb, None) for rgb in decoded))
+                        for rgb, predicted in samples:
+                            if lookahead:
+                                heat = smoother.update(predicted, rgb)
+                            else:
+                                heat = smoother.carry(rgb) if frames < next_prediction else None
+                                if heat is None:
+                                    heat = smoother.update(predict_heat(rgb), rgb)
+                                    next_prediction = frames + stride
                             heat = upsample(heat, rgb)
                             if sensor_sim is not None:
                                 heat = sensor_sim.update(heat)
@@ -474,21 +568,26 @@ def main():
                         help='temporally stable percentile display contrast (default on; raw is unaffected)')
     parser.add_argument('--flow-smoothing', action=argparse.BooleanOptionalAction, default=True,
                         help='carry the previous heat map along estimated motion with occlusion masking (default on)')
-    parser.add_argument('--stride', type=int, default=1,
+    parser.add_argument('--stride', type=int,
                         help='max frames between model predictions; reuse heat when motion tracks, '
                              'refresh early on cuts or unreliable motion (default 1: every frame)')
+    parser.add_argument('--turbo-preview', action='store_true',
+                        help='faster turbo draft: 256 px, stride 4, motion interpolation between keyframes '
+                             '(use --size and --stride to override)')
     parser.add_argument('--sensor-sim', action=argparse.BooleanOptionalAction, default=None,
                         help='simulated microbolometer noise, banding and vignette (default on for unet, '
                              'off for turbo, which synthesizes its own sensor texture)')
     args = parser.parse_args()
     unet = args.engine == 'unet'
-    args.size = args.size or (384 if unet else 512)
+    if args.size is None and not args.turbo_preview:
+        args.size = 384 if unet else 512
     args.sensor_sim = unet if args.sensor_sim is None else args.sensor_sim
     try:
         convert(args.input, args.output, args.palette, args.size, args.side_by_side,
                 args.weights, args.smoothing, args.raw, args.threads,
                 args.semantic, args.semantic_strength, args.device, args.auto_contrast,
-                args.flow_smoothing, args.sensor_sim, args.engine, args.turbo_weights, args.stride)
+                args.flow_smoothing, args.sensor_sim, args.engine, args.turbo_weights, args.stride,
+                turbo_preview=args.turbo_preview)
     except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
         parser.exit(1, f'fake-thermal: {error}\n')
 

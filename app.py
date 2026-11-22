@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent
 
 
 def run_media(upload, palette, side_by_side, smoothing, raw, semantic, semantic_strength,
-              device, auto_contrast, flow, sensor, engine='unet',
+              device, auto_contrast, flow, sensor, engine='unet', turbo_preview=False,
               progress=gr.Progress(track_tqdm=True)):
     if not upload:
         raise gr.Error('Upload an image or video first.')
@@ -27,12 +27,14 @@ def run_media(upload, palette, side_by_side, smoothing, raw, semantic, semantic_
         is_image = False
     directory = ROOT / 'outputs/ui' / uuid.uuid4().hex
     output = directory / ('thermal.png' if is_image else 'thermal.mp4')
+    turbo_preview = engine == 'turbo' and turbo_preview
     try:
         result = convert(upload, output, palette=palette, side_by_side=side_by_side,
-                         size=512 if engine == 'turbo' else 384,
+                         size=512 if engine == 'turbo' and not turbo_preview else None,
                          smoothing=smoothing, raw=raw, threads=2, semantic=semantic,
                          semantic_strength=semantic_strength, device=device,
-                         auto_contrast=auto_contrast, flow=flow, sensor=sensor, engine=engine)
+                         auto_contrast=auto_contrast, flow=flow, sensor=sensor, engine=engine,
+                         turbo_preview=turbo_preview)
     except Exception as error:
         raise gr.Error(str(error)) from error
     downloads = [str(output)] + ([result['raw']] if result['raw'] else [])
@@ -47,6 +49,8 @@ with gr.Blocks(title='fake-thermal') as app:
     upload = gr.File(label='Drop a video or image', file_types=['video', 'image'], type='filepath')
     engine = gr.Radio(list(ENGINES), value='unet', label='Engine',
                       info='unet: fast. turbo: far more photographic, ~2.5 s per vertical frame on an M1 Pro')
+    turbo_preview = gr.Checkbox(label='Turbo draft preview', visible=False,
+                                info='Faster, softer render. Leave off for the final export.')
     with gr.Row():
         palette = gr.Dropdown(list(PALETTES), value='ironbow', label='Palette')
         side = gr.Checkbox(label='RGB | thermal side by side')
@@ -68,8 +72,9 @@ with gr.Blocks(title='fake-thermal') as app:
     files = gr.File(label='Download results', file_count='multiple')
     # turbo synthesizes its own sensor texture; its semantic prior warms only people and animals
     engine.change(lambda choice: gr.update(value=choice == 'unet'), engine, sensor)
+    engine.change(lambda choice: gr.update(visible=choice == 'turbo'), engine, turbo_preview)
     button.click(run_media, [upload, palette, side, smoothing, raw, semantic, semantic_strength,
-                             device, auto_contrast, flow, sensor, engine],
+                             device, auto_contrast, flow, sensor, engine, turbo_preview],
                  [video, image, files, status], concurrency_limit=1)
 
 
