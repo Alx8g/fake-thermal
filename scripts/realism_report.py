@@ -420,8 +420,8 @@ def main():
     p.add_argument('--engine', choices=('unet', 'turbo'), default='unet')
     p.add_argument('--skip', type=float, default=1., help='turbo skip-connection strength')
     p.add_argument('--camera', default='none',
-                   help='turbo camera prompt: none (generic), flir, kaist, llvip, or auto (each frame's own '
-                        'camera; flatters the paired test, report it beside none)')
+                   help='turbo camera prompt: none (generic), flir, kaist, llvip, sf, or auto (each '
+                        'frame uses its own camera; flatters the paired test, report it beside none)')
     p.add_argument('--semantic', type=float, default=0., help='semantic prior strength (0 = off)')
     p.add_argument('--no-emissive', dest='emissive', action='store_false',
                    help='drop the flame/light colour heuristic from the semantic prior')

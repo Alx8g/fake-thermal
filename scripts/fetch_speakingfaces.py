@@ -21,8 +21,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
-import requests
 from PIL import Image
+
+try:  # only the download needs it; the palette and trim helpers do not
+    import requests
+except ImportError:  # pragma: no cover
+    requests = None
 
 BASE = 'https://huggingface.co/datasets/issai/Speaking_Faces/resolve/main/'
 # The 224-entry FLIR iron palette, coldest first: every frame uses all of it. Ordered as the
