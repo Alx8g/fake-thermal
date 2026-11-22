@@ -12,6 +12,7 @@ realism frames (outputs/realism/ids.json) are rendered for scoring.
 import argparse
 import json
 from collections import Counter
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import random
@@ -30,22 +31,28 @@ from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 from torchvision import transforms as T
 from torchvision.transforms import functional as TF
 
+from fake_thermal.appearance import MASKED_EDITS, SYNTHETIC_EDITS, edit_appearance
 from fake_thermal.augment import photo_only
 from fake_thermal.data import normalize_thermal, seed_worker
 from fake_thermal.discriminator import (MultiScaleDiscriminator, discriminator_loss,
                                         generator_adversarial_loss)
+from fake_thermal.losses import appearance_loss
 
 
 class TurboPairs(Dataset):
     """512x512 random crops; thermal stretched, dequantized, 3 channels in [-1, 1]."""
 
-    def __init__(self, data, split='train', stems=None, crop=512, training=True, augment=None):
+    def __init__(self, data, split='train', stems=None, crop=512, training=True, augment=None,
+                 appearance=False):
         root = Path(data) / 'pairs' / split
         self.augment = augment or {}
         self.rgb, self.thermal = root / 'rgb', root / 'thermal'
         self.stems = stems or sorted(p.stem for p in self.rgb.glob('*.jpg') if not p.name.startswith('._'))
         self.crop, self.training = crop, training
         self.jitter = T.ColorJitter(brightness=.2, contrast=.2, saturation=.15)
+        self.appearance = training and appearance
+        self.appearance_rng = None
+        self.material = root / 'physics'
 
     def __len__(self):
         return len(self.stems)
@@ -62,8 +69,25 @@ class TurboPairs(Dataset):
             rgb = im.convert('RGB')
         with Image.open(self.thermal / f'{stem}.png') as im:
             thermal = Image.fromarray(normalize_thermal(im.convert('L'), dequantize=self.training))
+        mask = None
+        if self.appearance:
+            if self.appearance_rng is None:
+                # Each loader worker gets its own stream, separate from clean crop/jitter RNGs.
+                seed = torch.initial_seed()
+                self.appearance_rng = random.Random(seed), np.random.RandomState(seed % 2 ** 32)
+            rng, np_rng = self.appearance_rng
+            paths = {kind: self.material / kind / f'{stem}.png' for kind in MASKED_EDITS}
+            available = [kind for kind, path in paths.items() if path.is_file()]
+            kind = rng.choice([*SYNTHETIC_EDITS, *available])
+            if kind in paths:
+                with Image.open(paths[kind]) as im:
+                    if im.size != rgb.size:
+                        raise ValueError(f'Appearance mask must match RGB dimensions: {paths[kind]}')
+                    mask = im.convert('L')
         if min(rgb.size) < self.crop:
             rgb, thermal = TF.resize(rgb, self.crop), TF.resize(thermal, self.crop)
+            if mask is not None:
+                mask = TF.resize(mask, self.crop)
         w, h = rgb.size
         if self.training:
             top, left = random.randint(0, h - self.crop), random.randint(0, w - self.crop)
@@ -71,15 +95,28 @@ class TurboPairs(Dataset):
             top, left = (h - self.crop) // 2, (w - self.crop) // 2
         rgb = TF.crop(rgb, top, left, self.crop, self.crop)
         thermal = TF.crop(thermal, top, left, self.crop, self.crop)
+        if mask is not None:
+            mask = TF.crop(mask, top, left, self.crop, self.crop)
         if self.training:
             if random.random() < .5:
                 rgb, thermal = TF.hflip(rgb), TF.hflip(thermal)
+                if mask is not None:
+                    mask = TF.hflip(mask)
             rgb = self.jitter(rgb)
         target = TF.to_tensor(thermal).repeat(3, 1, 1) * 2 - 1
-        if self.training and any(self.augment.values()):
-            photo = photo_only(np.asarray(rgb, np.float32) / 255, **self.augment)
-            return torch.from_numpy(photo).permute(2, 0, 1).contiguous(), target, stem
-        return TF.to_tensor(rgb), target, stem
+        augment = self.training and any(self.augment.values())
+        if not augment and not self.appearance:
+            return TF.to_tensor(rgb), target, stem
+        photo = np.asarray(rgb, np.float32) / 255
+        if augment:
+            photo = photo_only(photo, **self.augment)
+        base = torch.from_numpy(photo).permute(2, 0, 1).contiguous()
+        if not self.appearance:
+            return base, target, stem
+        material = np.asarray(mask, np.float32) / 255 if mask is not None else None
+        edited, influence = edit_appearance(photo, kind, material, rng=rng, np_rng=np_rng)
+        edit_tensor = torch.from_numpy(edited).permute(2, 0, 1).contiguous()
+        return base, target, stem, edit_tensor, torch.from_numpy(influence)[None]
 
 
 def stretch8(heat):
@@ -94,6 +131,23 @@ def amp_dtype(device):
 def autocast(device):
     dtype = amp_dtype(device)
     return torch.autocast(device.type, dtype=dtype or torch.float16, enabled=dtype is not None)
+
+
+def capture_rng(device):
+    accelerator = getattr(torch, device.type) if device.type != 'cpu' else None
+    return torch.get_rng_state(), accelerator.get_rng_state(device) if accelerator else None
+
+
+@contextmanager
+def replay_rng(device, state):
+    devices = [] if device.type == 'cpu' else [device]
+    device_type = device.type if devices else 'cuda'
+    with torch.random.fork_rng(devices=devices, device_type=device_type):
+        cpu, accelerator = state
+        torch.set_rng_state(cpu)
+        if accelerator is not None:
+            getattr(torch, device.type).set_rng_state(accelerator, device)
+        yield
 
 
 def save_grid(net, batch, path):
@@ -156,6 +210,10 @@ def main():
                         help='weight of a second, RGB-conditioned PatchGAN critic; it sees the photo and '
                              'the thermal together, so it can penalize thermal that copies visible-light '
                              'detail (paint, glare, see-through glass); 0 disables')
+    parser.add_argument('--appearance-weight', type=float, default=0.,
+                        help='weight of masked RGB-only edit loss against the original output and real thermal')
+    parser.add_argument('--appearance-every', type=int, default=4,
+                        help='run the extra RGB-only training pass every N steps (default 4)')
     parser.add_argument('--light-aug', type=float, default=0.,
                         help='probability of pasting synthetic lamps, headlights, lit windows or light pools '
                              'onto the photo only, so visible light stops reading as heat')
@@ -183,8 +241,11 @@ def main():
                              'the UNet runs at latent size and is faster without it')
     parser.add_argument('--seed', type=int, default=42)
     args = parser.parse_args()
+    if not np.isfinite(args.appearance_weight) or args.appearance_weight < 0:
+        parser.error('--appearance-weight must be finite and nonnegative')
+    if args.appearance_every < 1:
+        parser.error('--appearance-every must be positive')
 
-    import lpips
     from fake_thermal.turbo import Pix2PixTurbo
 
     torch.manual_seed(args.seed)
@@ -209,9 +270,9 @@ def main():
     params = net.trainable_parameters()
     print(f'START trainable={sum(p.numel() for p in params) / 1e6:.1f}M params', flush=True)
     optimizer = torch.optim.AdamW(params, lr=args.lr, weight_decay=1e-2)
-    disc = build_discriminator(args.disc, device)
-    optimizer_d = torch.optim.AdamW([p for p in disc.parameters() if p.requires_grad], lr=args.lr,
-                                    weight_decay=1e-2)
+    disc = build_discriminator(args.disc, device) if args.lambda_gan else None
+    optimizer_d = (torch.optim.AdamW([p for p in disc.parameters() if p.requires_grad], lr=args.lr,
+                                     weight_decay=1e-2) if disc is not None else None)
 
     def schedule(step):
         if step < args.warmup:
@@ -222,8 +283,11 @@ def main():
         return args.min_lr_ratio + (1 - args.min_lr_ratio) * .5 * (1 + np.cos(np.pi * min(1., progress)))
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, schedule)
-    scheduler_d = torch.optim.lr_scheduler.LambdaLR(optimizer_d, schedule)
-    perceptual = lpips.LPIPS(net='vgg').to(device).eval().requires_grad_(False)
+    scheduler_d = torch.optim.lr_scheduler.LambdaLR(optimizer_d, schedule) if optimizer_d else None
+    perceptual = None
+    if args.lambda_lpips:
+        import lpips
+        perceptual = lpips.LPIPS(net='vgg').to(device).eval().requires_grad_(False)
     pair_critic = MultiScaleDiscriminator().to(device) if args.pair_gan_weight else None
     pair_optimizer = (torch.optim.Adam(pair_critic.parameters(), lr=2e-4, betas=(.5, .999))
                       if pair_critic is not None else None)
@@ -231,7 +295,8 @@ def main():
 
     train = TurboPairs(args.data, crop=args.crop,
                        augment={'p_light': args.light_aug, 'p_print': args.print_aug, 'p_dark': args.dark_aug,
-                                'p_cast': args.cast_aug, 'cast_day': args.cast_day})
+                                'p_cast': args.cast_aug, 'cast_day': args.cast_day},
+                       appearance=args.appearance_weight > 0)
     batches = iter(DataLoader(train, batch_size=args.batch_size, sampler=train.sampler(args.iters * args.batch_size),
                               num_workers=args.workers, worker_init_fn=seed_worker, pin_memory=True,
                               drop_last=True, persistent_workers=args.workers > 0))
@@ -242,16 +307,25 @@ def main():
     val_batch = next(iter(DataLoader(val, batch_size=len(val))))
 
     clock = time.perf_counter()
+    appearance_values = []
     for step in range(1, args.iters + 1):
-        rgb, target, _ = next(batches)
+        batch = next(batches)
+        rgb, target, _ = batch[:3]
         rgb, target = rgb.to(device, non_blocking=True), target.to(device, non_blocking=True)
         net.set_train()
+        paired_rng = None
+        if args.appearance_weight and step % args.appearance_every == 0:
+            edited, influence = batch[3:]
+            if influence.any():
+                paired_rng = capture_rng(device)
         with autocast(device):
             pred = net(rgb)
             l2 = F.mse_loss(pred.float(), target)
-            lp = perceptual(pred.float(), target).mean()
-            disc.requires_grad_(False)
-            g_adv = disc(pred, for_G=True).mean()
+            lp = perceptual(pred.float(), target).mean() if perceptual is not None else l2.new_zeros(())
+            g_adv = l2.new_zeros(())
+            if disc is not None:
+                disc.requires_grad_(False)
+                g_adv = disc(pred, for_G=True).mean()
             if pair_critic is not None:
                 pair_critic.requires_grad_(False)
                 g_pair = generator_adversarial_loss(pair_critic(rgb, gray(pred))).float()
@@ -262,21 +336,33 @@ def main():
             raise RuntimeError(f'Non-finite loss at step {step}: {loss.item()}')
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
+        if paired_rng is not None:
+            edited = edited.to(device, non_blocking=True)
+            influence = influence.to(device, non_blocking=True)
+            with replay_rng(device, paired_rng), autocast(device):
+                edited_pred = net(edited)
+            appearance = appearance_loss(edited_pred, pred, target, influence)
+            if not torch.isfinite(appearance):
+                raise RuntimeError(f'Non-finite appearance loss at step {step}: {appearance.item()}')
+            (args.appearance_weight * appearance).backward()
+            appearance_values.append(appearance.item())
         torch.nn.utils.clip_grad_norm_(params, 1.)
         optimizer.step()
         scheduler.step()
 
-        disc.requires_grad_(True)
-        disc.cv_ensemble.requires_grad_(False)
-        with autocast(device):
-            d_real = disc(target, for_real=True).mean()
-            d_fake = disc(pred.detach(), for_real=False).mean()
-        d_loss = args.lambda_gan * (d_real + d_fake).float()
-        optimizer_d.zero_grad(set_to_none=True)
-        d_loss.backward()
-        torch.nn.utils.clip_grad_norm_(disc.parameters(), 1.)
-        optimizer_d.step()
-        scheduler_d.step()
+        d_loss = l2.new_zeros(())
+        if disc is not None:
+            disc.requires_grad_(True)
+            disc.cv_ensemble.requires_grad_(False)
+            with autocast(device):
+                d_real = disc(target, for_real=True).mean()
+                d_fake = disc(pred.detach(), for_real=False).mean()
+            d_loss = args.lambda_gan * (d_real + d_fake).float()
+            optimizer_d.zero_grad(set_to_none=True)
+            d_loss.backward()
+            torch.nn.utils.clip_grad_norm_(disc.parameters(), 1.)
+            optimizer_d.step()
+            scheduler_d.step()
         if pair_critic is not None:
             pair_critic.requires_grad_(True)
             with autocast(device):
@@ -286,12 +372,14 @@ def main():
             d_pair.backward()
             pair_optimizer.step()
 
-        if step % 20 == 0:
+        if step % 20 == 0 or step == args.iters:
             elapsed = time.perf_counter() - clock
             pair = (f' g_pair={g_pair.item():.4f} d_pair={d_pair.item():.4f}'
                     if pair_critic is not None else '')
+            cf = f' appearance={np.mean(appearance_values):.4f}' if appearance_values else ''
+            appearance_values.clear()
             print(f'iter={step}/{args.iters} loss={loss.item():.4f} l2={l2.item():.4f} lpips={lp.item():.4f} '
-                  f'g_adv={g_adv.item():.4f} d={d_loss.item():.4f}{pair} elapsed_s={elapsed:.0f} '
+                  f'g_adv={g_adv.item():.4f} d={d_loss.item():.4f}{pair}{cf} elapsed_s={elapsed:.0f} '
                   f'wall_s_per_iter={elapsed / step:.3f}', flush=True)
         if step % args.grid_every == 0 or step == args.iters:
             save_grid(net, val_batch, args.output / f'val_{step:06d}.jpg')

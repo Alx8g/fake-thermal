@@ -17,7 +17,9 @@ Next, in order of expected value:
    LWIR), road paint and logos, glare from lit lamps and headlights, and
    people whose heat follows clothing brightness. Levers: the RGB-conditioned
    critic (`--pair-gan-weight`), a people/animals-only semantic prior, and
-   training data where these cases are common.
+   training data where these cases are common. An opt-in
+   [visible-detail consistency loss and audit](TRAINING.md#visible-detail-consistency-experimental)
+   now test these failure modes without changing the shipped checkpoint.
 2. **Data diversity.** Training data is driving, surveillance and night
    streets from three cameras. Larger aligned RGB-thermal sets exist, e.g.
    LasHeR (1,224 aligned visible/thermal video pairs, 730K+ frame pairs, far

@@ -2,6 +2,17 @@ import torch
 from torch.nn import functional as F
 
 
+def appearance_loss(edited, clean, target, influence):
+    """Anchor edited regions to both the original prediction and paired thermal."""
+    edited = edited.float().mean(dim=1, keepdim=True)
+    clean = clean.detach().float().mean(dim=1, keepdim=True)
+    target = target.float().mean(dim=1, keepdim=True)
+    error = (edited - target).square() + .25 * (edited - clean).abs()
+    weight = influence.flatten(1).sum(1)
+    per_image = (influence * error).flatten(1).sum(1) / weight.clamp_min(1e-6)
+    return per_image.sum() / (weight > 0).sum().clamp_min(1)
+
+
 def ssim(pred, target):
     mu_x = F.avg_pool2d(pred, 7, 1)
     mu_y = F.avg_pool2d(target, 7, 1)

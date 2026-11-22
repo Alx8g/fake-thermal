@@ -4,6 +4,27 @@ A running lab notebook for the photorealism campaign: what was tried, what it
 measured, what it cost. Newest first. Conclusions are folded into TRAINING.md
 and ROADMAP.md.
 
+## Turbo visible-detail consistency pilot (22 Nov 2026)
+
+A 32-step L2-only CPU pilot compared ordinary fine-tuning with extra
+glare/print consistency training on 128 px crops. The audit used the same
+18 FLIR validation frames, edits and 128 px working size for all checkpoints.
+Drift is absolute change in raw output after an RGB-only edit; clean MAE
+is error to aligned thermal after stretching each clean output.
+
+| Checkpoint | Glare drift | Print drift | Clean MAE | Clean p1–p99 range |
+|---|---:|---:|---:|---:|
+| Shipped | .113 | .124 | .275 | .781 |
+| L2 control | .042 | .037 | .250 | .311 |
+| L2 + consistency | .036 | .035 | .265 | .303 |
+
+The additional loss reduced edit drift slightly versus the control, but
+worsened clean thermal error. Both fine-tuned checkpoints lost most of the
+shipped contrast. The pilot did not train on glass or clothing masks; the
+few annotated validation cases cannot establish a gain for either material.
+The shipped checkpoint stays unchanged. Re-test with the full training
+recipe and compare untouched renders blind before promoting a candidate.
+
 ## Two-keyframe turbo draft preview (22 Nov 2026)
 
 The draft preset runs the same checkpoint at a 256 px working short side.
