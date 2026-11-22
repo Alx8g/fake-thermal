@@ -4,7 +4,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
+import cv2
 import numpy as np
 from PIL import Image
 import torch
@@ -68,12 +70,6 @@ class PaletteTests(unittest.TestCase):
         def error(result):
             return float(np.abs(result[interior] - shifted_heat[interior]).mean())
         self.assertLess(error(results[True]), error(results[False]))
-        # --stride: carrying the previous map along the motion follows the shift too
-        carrier = TemporalSmoother(.75)
-        self.assertIsNone(carrier.carry(rgb))
-        carrier.update(heat, rgb)
-        self.assertLess(error(carrier.carry(shifted_rgb)), error(heat))
-        self.assertIsNone(TemporalSmoother(.75, flow=False).carry(rgb))
         # zero motion must reproduce the plain EMA blend exactly
         static, legacy = TemporalSmoother(.75), TemporalSmoother(.75, flow=False)
         static.update(np.zeros((4, 4)), np.zeros((16, 16, 3), np.uint8))
@@ -81,6 +77,43 @@ class PaletteTests(unittest.TestCase):
         rgb0 = np.zeros((16, 16, 3), np.uint8)
         np.testing.assert_allclose(static.update(np.ones((4, 4)), rgb0),
                                     legacy.update(np.ones((4, 4)), rgb0), atol=1e-6)
+
+    def test_carry_reuses_heat_when_motion_tracks(self):
+        rng = np.random.default_rng(12)
+        tiles = rng.integers(50, 170, (24, 24), dtype=np.uint8)
+        texture = cv2.resize(np.pad(tiles, 4, mode='edge'), (128, 128), interpolation=cv2.INTER_NEAREST)
+        rgb = np.repeat(texture[..., None], 3, axis=2)
+        shifted = np.pad(rgb[:, :-4], ((0, 0), (4, 0), (0, 0)), mode='edge')
+        heat = texture.astype(np.float32) / 255
+        expected = shifted[..., 0] / 255
+        smoother = TemporalSmoother()
+        self.assertIsNone(smoother.carry(rgb))
+        smoother.update(heat, rgb)
+        np.testing.assert_allclose(smoother.carry(rgb), heat, atol=1e-6)
+        back = np.zeros((32, 32, 2), np.float32)
+        back[..., 0] = -1
+        with patch('fake_thermal.infer.optical_flow', return_value=back):
+            carried = smoother.carry(shifted)
+        self.assertIsNotNone(carried)
+        np.testing.assert_allclose(carried, expected, atol=1e-6)
+        no_flow = TemporalSmoother(flow=False)
+        no_flow.update(heat, rgb)
+        self.assertIsNone(no_flow.carry(rgb))
+
+    def test_carry_rejects_local_change_without_advancing_history(self):
+        rgb = np.full((192, 192, 3), [0, 0, 140], np.uint8)
+        heat = np.zeros((192, 192), np.float32)
+        changed = rgb.copy()
+        changed[88:104, 88:104] = [53, 0, 0]  # similar luminance, different color
+        smoother = TemporalSmoother()
+        last = smoother.update(heat, rgb)
+        self.assertIsNone(smoother.carry(changed))
+        self.assertIs(smoother.previous, last)
+        np.testing.assert_array_equal(smoother.carry(rgb), heat)
+        cut = np.full_like(rgb, 255)
+        self.assertIsNone(smoother.carry(cut))
+        np.testing.assert_array_equal(smoother.update(heat + 1, cut), 1)
+        self.assertTrue(smoother.reset_history)
 
 
 def streams(path):

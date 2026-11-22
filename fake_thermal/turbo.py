@@ -60,7 +60,7 @@ class Pix2PixTurbo(nn.Module):
     """SD-Turbo UNet + VAE with LoRA adapters and encoder-to-decoder skip
     connections; a single denoising step maps the input latent to the output."""
 
-    def __init__(self, device='cuda', weights=None, lora_rank_unet=8, lora_rank_vae=4):
+    def __init__(self, device='cuda', weights=None, lora_rank_unet=8, lora_rank_vae=4, *, fuse=False):
         super().__init__()
         from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel
         from peft import LoraConfig
@@ -99,6 +99,11 @@ class Pix2PixTurbo(nn.Module):
                 module.load_state_dict(merged)
         self.lora_rank_unet, self.lora_rank_vae = rank_unet, rank_vae
         self.target_modules_unet, self.target_modules_vae = unet_targets, vae_targets
+        if fuse:
+            # Inference only: fold the LoRA projections into the fp32 weights before moving or casting.
+            for module in (unet, vae):
+                module.fuse_lora()
+                module.unload_lora()
         self.unet, self.vae = unet, vae
         self.timesteps = torch.tensor([999], device=self.device_name).long()
         self.to(self.device_name)

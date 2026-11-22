@@ -22,11 +22,13 @@ Next, in order of expected value:
    streets from three cameras. Larger aligned RGB-thermal sets exist, e.g.
    LasHeR (1,224 aligned visible/thermal video pairs, 730K+ frame pairs, far
    more varied scenes); check each licence before use.
-3. **Video.** Turbo is deterministic per frame (latent mode, no noise), and
-   the motion-compensated smoother still applies, but its temporal stability
-   on real footage has not been measured yet.
-4. **Speed.** Turbo runs ~0.5 frames/s on an M1 Pro. Distilling it into a
-   smaller student, or running it on a rented GPU for long clips, are the
+3. **Video.** The [real-footage tests](EXPERIMENTS.md#turbo-video-stride-and-adapter-fusion-22-nov-2026)
+   support the default motion-compensated smoothing. The optional accelerated
+   stride refreshes predictions when RGB motion does not track. Similar-looking
+   cuts, fast motion and temporal training remain open problems.
+4. **Speed.** Inference folds the LoRA adapters into the base weights; previous
+   M1 Pro tests took about 2.5 s per vertical frame before this change.
+   Distilling it into a smaller student, or running it on a rented GPU for long clips, are the
    options; realtime is out of reach for SD-Turbo-size models on a laptop.
 
 The phases below are the earlier plan (19-20 Nov), kept for the record.

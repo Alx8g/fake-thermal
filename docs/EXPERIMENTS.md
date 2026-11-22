@@ -4,6 +4,45 @@ A running lab notebook for the photorealism campaign: what was tried, what it
 measured, what it cost. Newest first. Conclusions are folded into TRAINING.md
 and ROADMAP.md.
 
+## Turbo video stride and adapter fusion (22 Nov 2026)
+
+The earlier FLIR and corridor tests below already support default smoothing.
+This run used the bundled turbo4-cast checkpoint on two new samples of 32
+consecutive frames: the start of [the White House walk in slow motion][walk-video]
+(center-cropped to portrait, 23.98 fps), and [OpenCV's pedestrian video][pedestrian-video]
+starting at 26 s (10 fps). Linux Xeon CPU, four Torch threads, 128 px working
+short side, semantic prior and sensor simulation off to isolate turbo.
+
+| Clip | Unfused median | Fused median | Fixed stride 2 predictions | Adaptive stride 2 predictions |
+|---|---:|---:|---:|---:|
+| Slow walk | 2.33 s/frame | 2.18 s/frame | 16/32 | 16/32 |
+| Pedestrians | 2.07 s/frame | 1.84 s/frame | 16/32 | 20/32 |
+
+Timings cover warmed model predictions (including stripe removal), not video
+I/O. Fusion took 4.7 s at startup and changed raw heat by at most 0.000068
+on the 0–1 scale. The render-speed gain is for sustained inference; short
+clips also pay that startup cost. No MPS or CUDA timings were taken.
+
+Warping error uses the RGB flow and reliable-pixel mask from
+`scripts/flicker_report.py` and one p1/p99 stretch per clip, fit to the
+full-rate reference. Default smoothing reduced mean error from .0168 to
+.0100 on the walk and .0134 to .0065 on the pedestrians; fusion did not
+change either result at that precision. On the pedestrians, adaptive stride
+reduced mean error from .00722 to .00674 versus fixed stride, and reduced
+mean raw-heat deviation from full-rate output from .01036 to .00784 (24%).
+It did not measurably change the walk versus fixed stride. The default
+remains full-rate: even a well-tracked RGB warp can miss changing heat.
+
+To render and inspect frame counts, run both `--stride 1` and `--stride 2`:
+
+```sh
+OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 fake-thermal clip.mp4 -o out.mp4 \
+  --engine turbo --device cpu --size 128 --stride 2 --no-semantic --raw
+```
+
+[walk-video]: https://commons.wikimedia.org/wiki/File:Kamala_Harris_and_Joe_Biden_walking_at_the_White_House_in_slow_motion.ogv
+[pedestrian-video]: https://github.com/opencv/opencv/blob/4.12.0/samples/data/vtest.avi
+
 ## Stripes, and judges who see the left panel as grainier (21 Nov 2026, late evening)
 
 **Found: judges see the left panel of a side-by-side sheet as grainier.**

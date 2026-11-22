@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -53,6 +54,31 @@ class EngineTests(unittest.TestCase):
             Image.fromarray(np.zeros((8, 8, 3), dtype=np.uint8)).save(source)
             with self.assertRaises(ValueError):
                 convert(source, Path(directory) / 'out.png', engine='nope')
+
+    def test_stride_refreshes_on_local_change_cut_and_max_interval(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'in.mp4'
+            dark = np.zeros((128, 128, 3), np.uint8)
+            subject = dark.copy()
+            subject[48:80, 48:80] = 255
+            bright = np.full_like(dark, 255)
+            subprocess.run(['ffmpeg', '-v', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', '128x128',
+                            '-r', '24', '-i', 'pipe:0', '-c:v', 'libx264', '-threads', '1', '-pix_fmt',
+                            'yuv420p', str(source)],
+                           input=np.stack([dark, subject, subject, bright, bright, bright, bright]).tobytes(),
+                           check=True)
+            predictions = []
+
+            def predict(rgb):
+                predictions.append((rgb[0, 0, 0] > 128, rgb[64, 64, 0] > 128))
+                return rgb[..., 0].astype(np.float32) / 255
+
+            with patch('fake_thermal.infer.TurboPredictor', return_value=predict):
+                stats = convert(source, Path(directory) / 'out.mp4', engine='turbo', semantic=False,
+                                sensor=False, device='cpu', stride=3)
+            self.assertEqual(predictions, [(False, False), (False, True), (True, True), (True, True)])
+            self.assertEqual(stats['model_frames'], 4)
+            self.assertEqual(stats['frames'], 7)
 
 
 if __name__ == '__main__':

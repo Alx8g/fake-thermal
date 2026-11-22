@@ -58,6 +58,13 @@ all local network interfaces; use only on a trusted machine/network.
   smoothing. Mean pixel change on a reduced RGB frame detects
   hard cuts and resets history. This is a heuristic, not optical-flow tracking;
   fast motion can trail and similar-looking cuts can evade detection.
+- `--stride N` sets the maximum frame interval between model predictions.
+  With flow enabled, in-between frames reuse motion-warped heat only when
+  the warped RGB closely matches the current RGB locally. Unreliable motion,
+  disocclusions and cuts can trigger an early prediction. Output frame count,
+  rate and audio are unchanged; timing JSON includes `model_frames` so you can
+  see how many frames were predicted rather than reused. Use the default
+  `--stride 1` for full-rate model inference.
 - Semantic priors default on at strength .7. `--no-semantic` disables semantic
   and emissive priors; `--semantic-strength 0` also bypasses segmentation.
   DeepLabV3 MobileNetV3 runs at 320px short side, using the pretrained
