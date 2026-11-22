@@ -4,6 +4,71 @@ A running lab notebook for the photorealism campaign: what was tried, what it
 measured, what it cost. Newest first. Conclusions are folded into TRAINING.md
 and ROADMAP.md.
 
+## What still gives the fake away (22 Nov 2026, evening)
+
+**The held-out test is mostly night.** The 32 FLIR frames used by every
+real-vs-fake round come from one continuous night drive (frames 7027-7567),
+and LLVIP is night street cameras; only KAIST is mostly daytime (28 of 32
+frames). In r8 the shipped model was caught on 64% of daytime KAIST pairs
+(turbo4: 57%), on every LLVIP pair and on 27 of 32 FLIR pairs. The headline
+82% is mostly a night number; daytime is closer to the line.
+
+**Diagnosis round (d1).** The shipped model's 96 r8 pairs were judged again by
+8 fresh judges, each pair twice, as separate files, with the judge asked to
+name the thing in the generated frame that gave it away and where it is. This
+panel was harsher than r8's: caught on 64/64 FLIR, 64/64 LLVIP and 41/64 KAIST
+pairs (88%; KAIST daytime 37/56). The 169 reasons, sorted by keyword (one
+reason can name several):
+
+| What gave it away | Share of catches | FLIR | KAIST | LLVIP |
+|---|---|---|---|---|
+| visible light drawn as heat: head and tail lights, signals, shop signs, lit windows, light pools | 67% | 42 | 24 | 48 |
+| grain, speckle, smearing or a washed-out haze | 44% | 51 | 8 | 16 |
+| people: flame-like, haloed, ghosted or missing | 36% | 13 | 3 | 44 |
+| dark disc or blot at a lamp or in the sky | 20% | 30 | 3 | 0 |
+| photo detail copied: road paint, lettering, plates, sharper than the camera | 15% | 0 | 22 | 3 |
+| see-through windscreens and windows | 12% | 0 | 0 | 20 |
+| heat layout: cold near road, warm sky | 7% | 3 | 9 | 0 |
+
+The night colour photos are dark, noisy and blurred by long exposures, and
+the model copies all three: speckle where the real camera is crisp, and
+walking people smeared into ghosts.
+
+**Seen scenes are not much better.** LLVIP's official split is by location
+(training locations 01-18 and 25, held-out 19-24 and 26), so its held-out
+frames are new places. Rendered on 32 training frames per source with the same
+pipeline, DISTS against the real frame was lower than on held-out frames
+(FLIR .185 against .292, KAIST .199 against .238, LLVIP .212 against .265),
+but the LLVIP training renders show the same tells: flame-like people, copied
+light, and no hot bonnet on a car that has just been driven. The gap is not
+mainly new places, so more data of the same kind is unlikely to close it.
+
+**Each camera has its own sharpness, and the model draws an average.** Share
+of image power by spatial frequency (fraction of Nyquist), generated over
+real, 32 held-out frames each:
+
+| | .05-.15 | .15-.3 | .3-.5 | .5-.75 | .75-1 |
+|---|---|---|---|---|---|
+| FLIR | 1.20 | 1.20 | 1.01 | 1.33 | 1.20 |
+| KAIST | 1.08 | 1.27 | 1.42 | 1.94 | 1.21 |
+| LLVIP | 1.22 | 1.23 | .65 | .37 | .58 |
+
+KAIST's camera is soft and the renders are too sharp ("finer than the camera
+allows"); LLVIP's camera is sharp and the renders are too soft ("smeared").
+One prompt and one rank-8 LoRA serve all three cameras, so the model learns a
+blend of their looks and matches none.
+
+**Next run (code ready, not yet trained).** `train_turbo.py --camera-prompts`
+gives each source camera its own prompt (FLIR and its re-registered video
+pairs share one), with 15% of items on the generic prompt so it stays usable;
+`realism_report.py generate --camera` and `TurboPredictor(camera=...)` pick a
+look. `--lora-rank-unet` and `--lora-rank-vae` grow an `--init` model's
+adapters without changing its output (new A rows small and random, new B
+columns zero, alpha scaled with the rank), so turbo4-cast can continue with
+more capacity. Matched-camera scores flatter the paired test and will be
+reported next to generic-prompt scores. The Mac was not available on the
+evening of 22 Nov; no training ran and no cloud credit was used.
+
 ## Stripes, and judges who see the left panel as grainier (21 Nov 2026, late evening)
 
 **Found: judges see the left panel of a side-by-side sheet as grainier.**
