@@ -53,7 +53,9 @@ def main(argv=None):
         lut_dir, scripts_dir = default_paths(sys.platform, home, os.environ)
         config = None
         if not args.dctl_only:
-            tools = [shutil.which(tool) for tool in ('ffmpeg', 'ffprobe')]
+            tools = [shutil.which(tool) or next((str(p) for p in
+                     [Path(sys.executable).parent / (tool + ('.exe' if sys.platform == 'win32' else ''))]
+                     if p.is_file()), None) for tool in ('ffmpeg', 'ffprobe')]
             if not all(tools):
                 parser.error('Install ffmpeg and ffprobe and put them on PATH before installing the render script.')
             config = {
@@ -70,6 +72,8 @@ def main(argv=None):
             config_path = home / CONFIG_NAME
             config_path.write_text(json.dumps(config, indent=2) + '\n', encoding='utf-8')
             print('Wrote {}'.format(config_path))
+    except PermissionError as error:
+        parser.exit(3, '{}\nAdministrator permission is required for this directory.\n'.format(error))
     except (OSError, ValueError) as error:
         parser.exit(1, '{}\nUse --lut-dir or --scripts-dir to select a writable Resolve directory.\n'.format(error))
 

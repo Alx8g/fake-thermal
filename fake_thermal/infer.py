@@ -16,6 +16,7 @@ import torch
 from tqdm import tqdm
 
 from fake_thermal.model import ThermalUNet
+from fake_thermal.media import media_tool
 from fake_thermal.device import DEVICES, memory_format, select_device
 from fake_thermal.semantic import SemanticPrior, fuse_heat, guided_upsample
 from fake_thermal.sensor import ThermalSensor
@@ -246,7 +247,7 @@ class DisplayNormalizer:
 
 def probe(path):
     try:
-        result = subprocess.run(['ffprobe', '-v', 'error', '-show_streams', '-show_format',
+        result = subprocess.run([media_tool('ffprobe'), '-v', 'error', '-show_streams', '-show_format',
                                  '-of', 'json', str(path)], capture_output=True, text=True, check=True)
     except subprocess.CalledProcessError:
         raise ValueError(UNREADABLE_MEDIA) from None
@@ -276,7 +277,7 @@ def probe(path):
 def fps_mode_args():
     """Frame passthrough flag: ffmpeg 7 removed -vsync, 5.1+ takes -fps_mode."""
     if fps_mode_args.passthrough is None:
-        probe = subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
+        probe = subprocess.run([media_tool('ffmpeg'), '-v', 'error', '-f', 'lavfi', '-i',
                                 'nullsrc=s=8x8:d=0.04', '-fps_mode', 'passthrough',
                                 '-f', 'null', '-'], capture_output=True)
         fps_mode_args.passthrough = probe.returncode == 0
@@ -369,7 +370,7 @@ def resize_upsample(heat, rgb):
 
 def encoder(path, w, h, fps):
     # yuv420p requires even dimensions; pad at most one pixel without stretching.
-    return subprocess.Popen(['ffmpeg', '-v', 'error', '-y', '-threads', '1', '-filter_threads', '1', '-f', 'rawvideo',
+    return subprocess.Popen([media_tool('ffmpeg'), '-v', 'error', '-y', '-threads', '1', '-filter_threads', '1', '-f', 'rawvideo',
                              '-pix_fmt', 'rgb24', '-s', f'{w}x{h}', '-r', fps, '-i', 'pipe:0',
                              '-an', '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2', '-c:v', 'libx264',
                              '-threads', '1', '-preset', 'fast', '-crf', '18', '-pix_fmt', 'yuv420p',
@@ -381,7 +382,7 @@ def range_args(start, duration):
 
 
 def mux_audio(video, original, output, start=0, duration=None):
-    command = ['ffmpeg', '-v', 'error', '-y', '-threads', '1', '-i', str(video),
+    command = [media_tool('ffmpeg'), '-v', 'error', '-y', '-threads', '1', '-i', str(video),
                *range_args(start, duration), '-i', str(original),
                '-map', '0:v:0', '-map', '1:a:0?', '-c:v', 'copy', '-c:a']
     codec = 'aac' if start or duration is not None else 'copy'
@@ -499,7 +500,7 @@ def convert(input_path, output_path, palette='ironbow', size=None, side_by_side=
         with tempfile.TemporaryDirectory(prefix='fake-thermal-', dir=output.parent) as temporary:
             temp = Path(temporary)
             with (temp / 'decode.log').open('wb') as errors:
-                decoder = subprocess.Popen(['ffmpeg', '-v', 'error', '-threads', '1', '-filter_threads', '1',
+                decoder = subprocess.Popen([media_tool('ffmpeg'), '-v', 'error', '-threads', '1', '-filter_threads', '1',
                                              *range_args(start, None), '-i', str(source), *range_args(0, duration),
                                              '-map', '0:v:0', '-an', *fps_mode_args(),
                                              '-threads', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'],

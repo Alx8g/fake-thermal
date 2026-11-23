@@ -26,7 +26,51 @@ appearance, not thermometry. Measurements: [experiment log](docs/EXPERIMENTS.md)
 *Demo images coming soon.* Local demo generation and video paths are documented
 in [Inference and demos](docs/INFERENCE.md).
 
-## Install (CPU, Python 3.10+)
+## One-command install
+
+macOS (Terminal):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Alx8g/fake-thermal/main/install.sh | sh
+```
+
+Windows (PowerShell 5.1 or newer):
+
+```powershell
+irm https://raw.githubusercontent.com/Alx8g/fake-thermal/main/install.ps1 | iex
+```
+
+Installs a pinned uv bootstrap, managed Python 3.11, CLI and bundled weights,
+ffmpeg/ffprobe if missing, the Resolve DCTL and render script, and the Premiere
+CEP panel. No system Python or administrator access is required for the core
+installation. If the system Resolve LUT folder is protected, follow the printed
+elevated DCTL command; the CLI and render script still install successfully.
+Restart editors after installation. The final one-second render also downloads
+the semantic model (~42 MB). Allow several GB and an internet connection.
+
+The macOS install lives in `~/Library/Application Support/fake-thermal`, Windows
+in `%LOCALAPPDATA%\fake-thermal`, Linux in `~/.fake-thermal`.
+macOS/Linux expose `~/.local/bin/fake-thermal` (add that directory to PATH if
+warned); Windows adds the venv Scripts directory to your user PATH. Open a new
+terminal after installing. Re-run to upgrade. Weights remain subject to the
+non-commercial/research restrictions below.
+
+For options, download the script and run `sh install.sh --turbo` or
+`powershell -ExecutionPolicy Bypass -File install.ps1 -Turbo`. Use
+`--skip-plugins` / `-SkipPlugins` to omit editor integrations, or
+`--uninstall` / `-Uninstall` to remove the installation and plugins (shared
+model caches and Adobe debug settings are retained). Protected DCTL removal
+uses the same administrator prompt as installation. Uninstall uses the stored
+installer without downloading uv, Python or source, and completes before returning.
+For piped installs, options can also be set with `FAKE_THERMAL_UNINSTALL=1`,
+or on Windows `FAKE_THERMAL_TURBO=1` and `FAKE_THERMAL_SKIP_PLUGINS=1`.
+Set `FAKE_THERMAL_REF` to a source ref or `FAKE_THERMAL_SOURCE` to a local checkout
+before running; PowerShell also accepts `-Ref` and `-Source`.
+`FAKE_THERMAL_HOME` overrides the installation root (custom roots require
+selecting the CLI path manually in Premiere). Linux supports the CLI and Resolve
+render script; Premiere is only installed on macOS/Windows.
+
+### Manual/development install (Python 3.10+)
 
 Install system **ffmpeg** (including ffprobe), then clone and install:
 

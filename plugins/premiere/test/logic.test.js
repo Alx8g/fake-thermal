@@ -7,6 +7,21 @@ const vm = require('node:vm');
 const {buildArgs, outputName, progressParser, PALETTES} = require('../js/logic');
 const clip = {mediaPath: '/media/a b.mov', sourceIn: 3, sourceOut: 5};
 const settings = {engine: 'unet', palette: 'ironbow', usedRange: true};
+test('panel discovers per-user installs without shell PATH', () => {
+    const script = fs.readFileSync(path.join(__dirname, '../js/panel.js'), 'utf8');
+    const discovery = script.slice(script.indexOf('function findCommand()'), script.indexOf('logic.PALETTES.forEach'));
+    for (const [platform, home, expected] of [
+        ['darwin', '/Users/editor', '/Users/editor/Library/Application Support/fake-thermal/venv/bin/fake-thermal'],
+        ['linux', '/home/editor', '/home/editor/.fake-thermal/venv/bin/fake-thermal'],
+        ['win32', 'C:\\Users\\editor', 'C:\\Users\\editor\\AppData\\Local\\fake-thermal\\venv\\Scripts\\fake-thermal.exe']
+    ]) {
+        const context = {process: {platform, env: {}}, path: platform === 'win32' ? path.win32 : path.posix,
+            os: {homedir: () => home}, fs: {existsSync: file => file === expected}};
+        assert.equal(vm.runInNewContext(discovery + '\nfindCommand()', context), expected);
+        context.fs.existsSync = () => false;
+        assert.equal(vm.runInNewContext(discovery + '\nfindCommand()', context), 'fake-thermal');
+    }
+});
 test('arguments preserve paths, trim used range, disable side-by-side', () => {
     const args = buildArgs(settings, clip, '/out/a.mp4');
     assert.deepEqual(args.slice(-4), ['--start', '3', '--duration', '2']);

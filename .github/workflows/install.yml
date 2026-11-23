@@ -1,0 +1,79 @@
+name: One-command installation
+on:
+  pull_request:
+  workflow_dispatch:
+  push:
+    branches: ['devin/**']
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare root-owned Resolve LUT folder on macOS
+        if: runner.os == 'macOS'
+        run: |
+          sudo mkdir -p "/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT"
+          sudo chown root:wheel "/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT"
+          sudo chmod 755 "/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT"
+      - name: Install macOS
+        if: runner.os == 'macOS'
+        env:
+          FAKE_THERMAL_REF: ${{ github.sha }}
+        run: |
+          cat install.sh | sh
+          test ! -e "$HOME/.local/bin/python3.11"
+          test ! -L "$HOME/.local/bin/python3.11"
+          test "$(stat -f %Su '/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT/Fake Thermal/Fake Thermal.dctl')" = root
+      - name: Install Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        env:
+          FAKE_THERMAL_REF: ${{ github.sha }}
+        run: |
+          $before = $ErrorActionPreference
+          $protocol = [Net.ServicePointManager]::SecurityProtocol
+          $pythonDir = $env:UV_PYTHON_INSTALL_DIR
+          Get-Content install.ps1 -Raw | Invoke-Expression
+          if ($ErrorActionPreference -ne $before) { throw 'Preference leaked' }
+          if ([Net.ServicePointManager]::SecurityProtocol -ne $protocol) { throw 'TLS setting leaked' }
+          if ($env:UV_PYTHON_INSTALL_DIR -ne $pythonDir) { throw 'uv environment leaked' }
+      - name: Verify macOS in a fresh shell
+        if: runner.os == 'macOS'
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          command -v fake-thermal
+          root="$HOME/Library/Application Support/fake-thermal"
+          fake-thermal "$root/verification-input.mp4" -o "$root/ci.mp4"
+          "$root/venv/bin/python" scripts/check_install.py
+          cat install.sh | FAKE_THERMAL_UNINSTALL=1 sh
+          test ! -e "$root"
+          test ! -e "$HOME/.local/bin/python3.11"
+          test ! -L "$HOME/.local/bin/python3.11"
+          test ! -e "$HOME/.local/bin/fake-thermal"
+          test ! -e "$HOME/.fake-thermal-resolve.json"
+          test ! -e "/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT/Fake Thermal"
+          test ! -e "$HOME/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility/Fake Thermal Render.py"
+          test ! -e "$HOME/Library/Application Support/Adobe/CEP/extensions/com.alx8g.fakethermal.panel"
+      - name: Verify Windows in a fresh shell
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:Path = [Environment]::GetEnvironmentVariable('Path','User') + ';' + $env:Path
+          Get-Command fake-thermal -ErrorAction Stop
+          $root = "$env:LOCALAPPDATA\fake-thermal"
+          fake-thermal "$root\verification-input.mp4" -o "$root\ci.mp4"
+          if ($LASTEXITCODE) { throw 'Render failed' }
+          & "$root\venv\Scripts\python.exe" scripts/check_install.py
+          if ($LASTEXITCODE) { throw 'Verification failed' }
+          $env:FAKE_THERMAL_UNINSTALL = '1'
+          Get-Content install.ps1 -Raw | Invoke-Expression
+          if (Test-Path $root) { throw 'Install root retained' }
+          if (Test-Path "$HOME\.fake-thermal-resolve.json") { throw 'Resolve config retained' }
+          if (Test-Path "$env:PROGRAMDATA\Blackmagic Design\DaVinci Resolve\Support\LUT\Fake Thermal") { throw 'DCTL retained' }
+          if (Test-Path "$env:APPDATA\Blackmagic Design\DaVinci Resolve\Support\Fusion\Scripts\Utility\Fake Thermal Render.py") { throw 'Resolve script retained' }
+          if (Test-Path "$env:APPDATA\Adobe\CEP\extensions\com.alx8g.fakethermal.panel") { throw 'Premiere panel retained' }
+          if (([Environment]::GetEnvironmentVariable('Path','User')).Split(';') -contains "$root\venv\Scripts") { throw 'PATH entry retained' }
