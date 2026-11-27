@@ -1,0 +1,410 @@
+{
+  "flir": {
+    "available_pairs": 5142,
+    "counts": {
+      "train": 4830,
+      "excluded": 52,
+      "val": 260
+    },
+    "resolutions": {
+      "(640, 512)": 5142
+    },
+    "inferred_sequence_groups": [
+      [
+        2,
+        507,
+        314,
+        "train"
+      ],
+      [
+        543,
+        1096,
+        343,
+        "train"
+      ],
+      [
+        1130,
+        1323,
+        23,
+        "train"
+      ],
+      [
+        1351,
+        1351,
+        1,
+        "train"
+      ],
+      [
+        1387,
+        1415,
+        6,
+        "train"
+      ],
+      [
+        1439,
+        1511,
+        12,
+        "train"
+      ],
+      [
+        1558,
+        1667,
+        35,
+        "train"
+      ],
+      [
+        1692,
+        2897,
+        984,
+        "train"
+      ],
+      [
+        2922,
+        3583,
+        485,
+        "train"
+      ],
+      [
+        3628,
+        3678,
+        44,
+        "train"
+      ],
+      [
+        3705,
+        3705,
+        1,
+        "train"
+      ],
+      [
+        3726,
+        3759,
+        16,
+        "train"
+      ],
+      [
+        3786,
+        3827,
+        30,
+        "train"
+      ],
+      [
+        3915,
+        3960,
+        31,
+        "train"
+      ],
+      [
+        3987,
+        4610,
+        447,
+        "train"
+      ],
+      [
+        4632,
+        5359,
+        612,
+        "train"
+      ],
+      [
+        5383,
+        5512,
+        93,
+        "train"
+      ],
+      [
+        5560,
+        5619,
+        13,
+        "train"
+      ],
+      [
+        5644,
+        5847,
+        58,
+        "train"
+      ],
+      [
+        5968,
+        5982,
+        3,
+        "train"
+      ],
+      [
+        6008,
+        6032,
+        6,
+        "train"
+      ],
+      [
+        6081,
+        6099,
+        3,
+        "train"
+      ],
+      [
+        6148,
+        6156,
+        3,
+        "train"
+      ],
+      [
+        6194,
+        6226,
+        9,
+        "train"
+      ],
+      [
+        6282,
+        6294,
+        11,
+        "train"
+      ],
+      [
+        6372,
+        6374,
+        2,
+        "train"
+      ],
+      [
+        6399,
+        6399,
+        1,
+        "train"
+      ],
+      [
+        6452,
+        6452,
+        1,
+        "train"
+      ],
+      [
+        6489,
+        6644,
+        45,
+        "train"
+      ],
+      [
+        6668,
+        6689,
+        4,
+        "train"
+      ],
+      [
+        6710,
+        6737,
+        7,
+        "train"
+      ],
+      [
+        6758,
+        6783,
+        4,
+        "train"
+      ],
+      [
+        6828,
+        6868,
+        16,
+        "excluded"
+      ],
+      [
+        6897,
+        6911,
+        5,
+        "excluded"
+      ],
+      [
+        6939,
+        6956,
+        7,
+        "excluded"
+      ],
+      [
+        6995,
+        7567,
+        260,
+        "val"
+      ],
+      [
+        7595,
+        7618,
+        7,
+        "excluded"
+      ],
+      [
+        7658,
+        7707,
+        17,
+        "excluded"
+      ],
+      [
+        7748,
+        7866,
+        45,
+        "train"
+      ],
+      [
+        7891,
+        7968,
+        23,
+        "train"
+      ],
+      [
+        7991,
+        8032,
+        14,
+        "train"
+      ],
+      [
+        8057,
+        8057,
+        1,
+        "train"
+      ],
+      [
+        8080,
+        8130,
+        18,
+        "train"
+      ],
+      [
+        8163,
+        8170,
+        6,
+        "train"
+      ],
+      [
+        8522,
+        8545,
+        7,
+        "train"
+      ],
+      [
+        8568,
+        8575,
+        3,
+        "train"
+      ],
+      [
+        8597,
+        8697,
+        35,
+        "train"
+      ],
+      [
+        8718,
+        8820,
+        15,
+        "train"
+      ],
+      [
+        8846,
+        8960,
+        80,
+        "train"
+      ],
+      [
+        8984,
+        9417,
+        303,
+        "train"
+      ],
+      [
+        9464,
+        10227,
+        633,
+        "train"
+      ]
+    ],
+    "split_policy": "whole index runs (gap >20), 150-index embargo around val; seed 42; approximate scenes only"
+  },
+  "llvip": {
+    "available_pairs": 15488,
+    "scenes": {
+      "train": [
+        "01",
+        "02",
+        "03",
+        "04",
+        "05",
+        "06",
+        "07",
+        "08",
+        "09",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "25"
+      ],
+      "val": [
+        "19",
+        "20",
+        "21",
+        "22",
+        "23",
+        "24",
+        "26"
+      ]
+    },
+    "split_policy": "original train/test, disjoint two-digit scene prefixes",
+    "counts": {
+      "val": 3463,
+      "train": 12025
+    },
+    "resolutions": {
+      "((1280, 1024), (1280, 1024))": 15488
+    },
+    "lighting": {
+      "val_low_light": 3463,
+      "train_low_light": 12025
+    }
+  },
+  "kaist": {
+    "available_pairs": 9853,
+    "unmatched_rgb": [
+      "set00_V000_I01629 (copy 1)",
+      "set00_V000_I01631 (copy 1)"
+    ],
+    "unmatched_thermal": [],
+    "split_policy": "sets00-05 train / sets06-11 val; every fifth available matched frame per sequence",
+    "lighting_policy": "KAIST set convention: 00-02/06-08 day, 03-05/09-11 night",
+    "counts": {
+      "train": 1528,
+      "val": 455
+    },
+    "resolutions": {
+      "((640, 512), (640, 512))": 1983
+    },
+    "lighting": {
+      "train_day": 958,
+      "train_night": 570,
+      "val_day": 294,
+      "val_night": 161
+    }
+  },
+  "video": {
+    "pairs": 3749,
+    "recordings": {
+      "video-BzZspxAweF8AnKhWK": 338,
+      "video-FkqCGijjAKpABetZZ": 226,
+      "video-PGdt7pJChnKoJDt35": 208,
+      "video-RMxN6a4CcCeLGu4tA": 1033,
+      "video-YnfPeH8i2uBWmsSd2": 540,
+      "video-dvZBYnphN2BwdMKBc": 565,
+      "video-hnbGXq3nNPjBbc7CL": 411,
+      "video-msNEBxJE5PPDqenBM": 428
+    },
+    "resolutions": {
+      "((1224, 1024), (640, 512))": 2151,
+      "((1024, 768), (640, 512))": 1598
+    },
+    "usable_pairs": 0
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "batch_size": 4,
+  "iterations": 20000,
+  "crop": 256,
+  "device": "mps",
+  "precision": "fp32",
+  "layout": "auto",
+  "seed": 42,
+  "frequency_alpha": 0.0,
+  "ema_decay": 0.999,
+  "head": "onestep-flow-v2",
+  "loss": "conditional flow matching: MSE on x_1 - x_0",
+  "sampling": "one-step: x_0 + v(x_0, t=1 | rgb), clamped to [0, 1]",
+  "warmstart": "outputs/ckpt/best.pt",
+  "learning_rates": [
+    3e-05,
+    0.0003
+  ],
+  "source_counts": {
+    "flir": 4830,
+    "kaist": 1528,
+    "llvip": 12025
+  }
+}
